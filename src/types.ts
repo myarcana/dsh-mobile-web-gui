@@ -31,8 +31,24 @@ export interface SessionSummary {
   readonly running: boolean
   /** Last durable event position, so the client knows a cached render is stale before the user taps. */
   readonly latestSeq: number
-  /** The workspace this session belongs to, for breadcrumbs. */
+  /** The workspace this session belongs to, as a display title. */
   readonly workspace: string
+  /**
+   * Stable id of the group this row belongs to.
+   *
+   * A workspace record's own id when one owns the session, and a
+   * `cwd:`-prefixed directory otherwise — never a display title, which two
+   * workspaces may legitimately share.
+   */
+  readonly workspaceId: string
+  /**
+   * Where this row's group sorts, lowest first.
+   *
+   * The registry's own durable order, so the list matches the desktop UI's
+   * workspace order rather than re-deriving one from activity. Sessions no
+   * record owns sort after every workspace.
+   */
+  readonly workspaceOrder: number
   /** One line of the most recent content. */
   readonly lastLine: string
   /** Epoch milliseconds of the last durable event. */

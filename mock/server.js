@@ -15,10 +15,26 @@ import { StreamHub } from '../src/stream.ts'
 const PORT = Number(process.env.PORT ?? 7788)
 const hooks = new Map()
 const sessions = new Map()
+// Two records sharing a display title, which is legal, plus one session no
+// record owns — the three grouping cases worth seeing on screen.
+const workspaces = new Map([
+  ['ws-billing', { id: 'ws-billing', title: 'billing', path: '/home/dev/billing', sessionIds: [] }],
+  ['ws-infra', { id: 'ws-infra', title: 'infra', path: '/home/dev/infra', sessionIds: [] }],
+  ['ws-other', { id: 'ws-other', title: 'billing', path: '/home/dev/other-billing', sessionIds: [] }]
+])
 
 const ctx = {
   logger: { info: console.log, warn: console.warn },
   effect () {},
+  // The optional-dependency idiom the host uses for services a profile may not
+  // install. The mock answers it eagerly so grouping and archive filtering are
+  // exercised, exactly as they are on the real box.
+  inject (names, callback) {
+    const child = Object.assign(Object.create(null), ctx)
+    for (const name of names) child[name] = ctx[name]
+    callback(child)
+    return () => true
+  },
   on (name, listener, prepend) {
     const list = hooks.get(name) ?? []
     if (prepend) list.unshift(listener)
@@ -31,16 +47,26 @@ const ctx = {
     roots: () => [...sessions.values()]
   },
   sessionQuery: {
-    async observeSession (id) {
+    // The installed 0.1.1 engine exposes readSession/listSessions; the mock
+    // mirrors that surface so the GUI cannot pass against a shape the real host
+    // does not have.
+    async readSession (id) {
       const s = sessions.get(id)
       if (s === undefined) throw new Error('No mock session ' + id)
-      return {
-        events: s.events.slice(),
-        header: { createdAt: s.createdAt, cwd: s.cwd },
-        cursor: s.events.length - 1,
-        [Symbol.dispose] () {}
-      }
+      return { session: { id, createdAt: s.createdAt, cwd: s.cwd }, events: s.events.slice() }
+    },
+    async listSessions () {
+      return [...sessions.values()].map(s => ({
+        header: { id: s.id, createdAt: s.createdAt, cwd: s.cwd },
+        live: true,
+        persisted: false
+      }))
     }
+  },
+  workspaceRegistry: {
+    list: () => [...workspaces.values()]
+      .map(w => ({ id: w.id, title: w.title, path: w.path, sessionIds: [...w.sessionIds] })),
+    archivedSessionIds: ['archived-example']
   }
 }
 
@@ -62,7 +88,6 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 function session (id, title, cwd) {
   const s = {
     id,
-    session: { id },
     cwd,
     createdAt: Date.now() - 3_600_000,
     events: [],
@@ -73,9 +98,21 @@ function session (id, title, cwd) {
     followup (message) { prompt(s, message) },
     cancel () { s.question?.abort() }
   }
+  // The live-session shape the real host exposes: `agent.session.id/.header/.events`.
+  // Getters, because the log is appended in place and a snapshot would go stale.
+  s.session = {
+    id,
+    get header () { return { id, createdAt: s.createdAt, cwd: s.cwd } },
+    get events () { return s.events }
+  }
   sessions.set(id, s)
   add(s, 'session/title', { title })
   return s
+}
+
+/** File a session under a workspace record, the way the registry does. */
+function owns (workspaceId, id) {
+  workspaces.get(workspaceId)?.sessionIds.push(id)
 }
 
 function add (s, type, data) {
@@ -170,6 +207,7 @@ function prompt (s, message) {
 const hub = new StreamHub(ctx)
 
 const billing = session('billing', 'Split the invoice module', '/home/dev/billing')
+owns('ws-billing', 'billing')
 user(billing, 'Split `invoice.ts` into smaller modules.')
 turn(billing, async () => {
   say(billing, 'I read `invoice.ts`: 900 lines mixing **tax**, discounts and totals. It splits two ways.')
@@ -189,6 +227,7 @@ turn(billing, async () => {
 })
 
 const migration = session('migration', 'Upgrade Postgres to 17', '/home/dev/infra')
+owns('ws-infra', 'migration')
 user(migration, 'Plan the Postgres 17 upgrade.')
 turn(migration, async () => {
   const answer = await ask(migration, [{
@@ -211,6 +250,15 @@ turn(migration, async () => {
 })
 
 const scratch = session('scratch', 'Scratch', '/home/dev')
+// Deliberately unowned: it must still appear, grouped after every record.
+
+const second = session('billing-again', 'Reconcile the invoice totals', '/home/dev/other-billing')
+owns('ws-other', 'billing-again')
+user(second, 'The totals disagree between the two exports.')
+turn(second, async () => {
+  say(second, 'Found it: one export rounds per line, the other per invoice.')
+  return true
+})
 user(scratch, 'Hello')
 turn(scratch, async () => {
   say(scratch, 'Hi. Send me anything and I echo it back. Put the word "ask" in it and I ask you a question.')

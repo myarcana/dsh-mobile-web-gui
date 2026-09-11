@@ -56,8 +56,8 @@ async function alreadyAccepted(
   sessionId: SessionId,
   clientMessageId: string,
 ): Promise<boolean> {
-  using observation = await ctx.sessionQuery.observeSession(sessionId, { projectionMode: 'none' })
-  for (const event of observation.events) {
+  const { events } = await ctx.sessionQuery.readSession(sessionId)
+  for (const event of events) {
     if (event.type !== 'user/message') continue
     const source = event.data.source
     if (source.kind === 'webgui' && source.clientMessageId === clientMessageId) return true

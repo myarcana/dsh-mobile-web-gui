@@ -9,10 +9,22 @@
  * @module
  */
 
-import { brandString, type Branded } from '@deepseek-ai/dsh-brand'
+import type { Branded } from '@deepseek-ai/dsh-brand'
 
 /** A URL admitted by {@link SafeUrl}; minted by check, never asserted. */
 export type SafeUrl = Branded<'SafeUrl'>
+
+/**
+ * Apply a compile-time string brand without changing the value.
+ *
+ * Inlined rather than imported from `@deepseek-ai/dsh-brand`'s `brandString`:
+ * the host's installed `dsh-brand` predates that runtime export, and the
+ * package documents itself as carrying no runtime identity, so a same-shape
+ * local copy is exactly equivalent.
+ */
+function brandString<T extends string>(value: string): T {
+  return value as T
+}
 
 /** Schemes a transcript link may address. `javascript:` and `data:` are absent by construction. */
 const SAFE_SCHEMES: ReadonlySet<string> = new Set(['http:', 'https:', 'mailto:'])

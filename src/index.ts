@@ -3,12 +3,11 @@
  * commanding and orchestrating sessions from a phone.
  *
  * In-process rather than a separate process over the SDK's stdio boundary,
- * because four of the seams this GUI needs only exist in-process: one
- * consistent transcript cut (`sessionQuery.observeSession`), state without
- * folding the log (`sessionProjections.snapshot`), the durable event feed
- * (`session/event`), and the live token stream (`agent/assistant-stream`). The
- * SDK exposes durable events only — a stdio server would refold every
- * projection it wanted and could not stream tokens at all.
+ * because three of the seams this GUI needs only exist in-process: one
+ * consistent transcript cut for a live or cold session alike
+ * (`sessionQuery.readSession`), the durable event feed (`session/event`), and
+ * the live token stream (`agent/assistant-stream`). The SDK exposes durable
+ * events only — a stdio server could not stream tokens at all.
  *
  * @module @deepseek-ai/dsh-web-gui
  */

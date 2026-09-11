@@ -18,9 +18,10 @@ import type { ServerResponse } from 'node:http'
 import type { AssistantStreamFrame } from '@deepseek-ai/dsh-agent'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
+import { Corpus } from './corpus.ts'
 import { Questions } from './questions.ts'
 import { renderEvent } from './render.ts'
-import { summaries, tail } from './sessions.ts'
+import { tail } from './sessions.ts'
 
 /** Live token flushes per second are what hurt on a bad link; coalesce to this. */
 const FLUSH_MS = 250
@@ -57,9 +58,14 @@ export class StreamHub {
   /** Questions held for browsers to answer; a change reaches every client as a summary refresh. */
   readonly questions: Questions
 
+  /** The session list, read from the whole corpus rather than from live agents. */
+  readonly corpus: Corpus
+
   private readonly clients = new Set<Client>()
   private readonly live = new Map<string, Live>()
   private summarySeq = 0
+  /** Corpus version last broadcast, so an event that changed no row is not re-sent to every phone. */
+  private sentVersion = -1
   private readonly ctx: Context
   private flushTimer: NodeJS.Timeout | undefined
   private beatTimer: NodeJS.Timeout | undefined
@@ -71,9 +77,15 @@ export class StreamHub {
   constructor(ctx: Context) {
     this.ctx = ctx
     // A question arriving or settling appends nothing to the log, so it pushes
-    // its own summary refresh.
-    this.questions = new Questions(ctx, () => { void this.refreshSummaries() })
+    // its own refresh — and must force one, because the rows it changes (the
+    // ask badges) are not derived from any log and so move no corpus version.
+    this.questions = new Questions(ctx, () => { void this.refreshSummaries(true) })
+    // The corpus refreshes on its own when a background read fills in a row,
+    // which is how a cold session's content reaches the list without the first
+    // paint waiting on a disk read for every session on the box.
+    this.corpus = new Corpus(ctx, () => { void this.refreshSummaries() })
     ctx.on('session/event', (session: Session, event: SessionEvent) => {
+      this.corpus.noteEvent(session.id)
       this.onEvent(session.id, event)
     })
     ctx.on('agent/assistant-stream', payload => {
@@ -227,10 +239,14 @@ export class StreamHub {
   /**
    * Recompute and broadcast session summaries.
    */
-  private async refreshSummaries(): Promise<void> {
+  private async refreshSummaries(force = false): Promise<void> {
     if (this.clients.size === 0) return
+    // A session event that changed no visible row (a tool event on a session
+    // nobody has opened, say) must not cost every client a full re-list.
+    if (!force && this.corpus.version === this.sentVersion) return
+    this.sentVersion = this.corpus.version
     this.summarySeq += 1
-    const rows = await summaries(this.ctx, this.questions)
+    const rows = await this.corpus.rows(this.questions)
     for (const client of this.clients) {
       client.summarySeq = this.summarySeq
       this.send(client, 's', rows, cursor(this.epoch, client, client.focus, null))
@@ -243,7 +259,10 @@ export class StreamHub {
    */
   private async sendSummaries(client: Client): Promise<void> {
     client.summarySeq = this.summarySeq
-    this.send(client, 's', await summaries(this.ctx, this.questions), cursor(this.epoch, client, client.focus, null))
+    // This client just received the current rows, so the next no-op event must
+    // not re-broadcast them to everyone.
+    this.sentVersion = this.corpus.version
+    this.send(client, 's', await this.corpus.rows(this.questions), cursor(this.epoch, client, client.focus, null))
   }
 
   /**

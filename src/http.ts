@@ -18,9 +18,10 @@ import { SessionId } from '@deepseek-ai/dsh-session'
 import { encoded, type AssetTable } from './assets.ts'
 import { toAnswers, type Questions } from './questions.ts'
 import { send } from './send.ts'
-import { expanded, summaries, tail } from './sessions.ts'
+import { expanded, tail } from './sessions.ts'
 import { policy, shell, type ShellState } from './shell.ts'
 import { idOf, StreamHub } from './stream.ts'
+import type { Corpus } from './corpus.ts'
 import type { SessionSummary } from './types.ts'
 
 /** Largest prompt body accepted, so a hostile or broken client cannot exhaust memory. */
@@ -46,7 +47,7 @@ export function handler(ctx: Context, assets: AssetTable, hub: StreamHub): Handl
       const header = req.headers['last-event-id']
       return hub.attach(res, typeof header === 'string' ? header : undefined, controller.signal)
     }
-    if (req.method === 'GET' && path === '/api/sessions') return json(res, await summaries(ctx, hub.questions))
+    if (req.method === 'GET' && path === '/api/sessions') return json(res, await hub.corpus.rows(hub.questions))
     const expand = /^\/api\/s\/([^/]+)\/e\/(\d+)$/.exec(path)
     if (req.method === 'GET' && expand !== null) {
       const html = await expanded(ctx, SessionId(decodeURIComponent(expand[1] ?? '')), Number(expand[2]))
@@ -92,7 +93,9 @@ export function handler(ctx: Context, assets: AssetTable, hub: StreamHub): Handl
       // `/` is a shortcut, not a view. Redirect so every screen has exactly one
       // canonical, deep-linkable URL and the client router never has to guess
       // which one `/` meant.
-      const rows = await summaries(ctx, hub.questions)
+      const rows = await hub.corpus.rows(hub.questions)
+      // Newest first, which the corpus guarantees, so this is the session the
+      // reader most likely meant. `/` is a shortcut, not a view.
       const latest = rows[0]
       res.writeHead(302, {
         location: latest === undefined ? '/sessions' : `/s/${encodeURIComponent(latest.id)}`,
@@ -101,7 +104,7 @@ export function handler(ctx: Context, assets: AssetTable, hub: StreamHub): Handl
       res.end()
       return
     }
-    if (req.method === 'GET') return document(ctx, assets, hub.questions, res, url)
+    if (req.method === 'GET') return document(ctx, assets, hub, res, url)
     res.writeHead(405, { 'content-type': 'text/plain; charset=utf-8' })
     res.end('Method not allowed')
   }
@@ -121,11 +124,11 @@ export function handler(ctx: Context, assets: AssetTable, hub: StreamHub): Handl
 async function document(
   ctx: Context,
   assets: AssetTable,
-  questions: Questions,
+  hub: StreamHub,
   res: ServerResponse,
   url: URL,
 ): Promise<void> {
-  const state = await resolve(ctx, questions, url)
+  const state = await resolve(ctx, hub.questions, url, hub.corpus)
   const { html, nonce } = shell(assets, state)
   res.writeHead(200, {
     'content-type': 'text/html; charset=utf-8',
@@ -144,8 +147,8 @@ async function document(
  * @param url - the requested URL.
  * @returns the shell state for that route.
  */
-async function resolve(ctx: Context, questions: Questions, url: URL): Promise<ShellState> {
-  const rows = await summaries(ctx, questions)
+async function resolve(ctx: Context, questions: Questions, url: URL, corpus: Corpus): Promise<ShellState> {
+  const rows = await corpus.rows(questions)
   const event = /^\/s\/([^/]+)\/e\/(\d+)$/.exec(url.pathname)
   if (event !== null) {
     const id = SessionId(decodeURIComponent(event[1] ?? ''))
@@ -158,10 +161,12 @@ async function resolve(ctx: Context, questions: Questions, url: URL): Promise<Sh
       title: `One event in ${row?.title ?? 'this session'}`,
       crumbs: [
         { label: 'Sessions', href: '/sessions' },
-        ...(row === undefined ? [] : [{ label: row.title, href: `/s/${encodeURIComponent(row.id)}` }]),
+        ...(row === undefined ? [] : [{ label: row.workspace, href: `/sessions#${encodeURIComponent(row.workspaceId)}` }]),
+        ...(row === undefined ? [] : [{ label: row.title, href: `/s${'/'}${encodeURIComponent(row.id)}` }]),
         { label: `Event ${seq}`, href: url.pathname },
       ],
       renderedThrough: -1,
+      canSend: false,
       asks: [],
     }
   }
@@ -173,6 +178,7 @@ async function resolve(ctx: Context, questions: Questions, url: URL): Promise<Sh
       title: 'Sessions',
       crumbs: [{ label: 'Sessions', href: '/sessions' }],
       renderedThrough: -1,
+      canSend: false,
       asks: [],
     }
   }
@@ -201,10 +207,12 @@ async function transcriptState(
     // Built from workspace membership, not from how the reader arrived.
     crumbs: [
       { label: 'Sessions', href: '/sessions' },
-      ...(row === undefined ? [] : [{ label: row.workspace, href: `/sessions#${encodeURIComponent(row.workspace)}` }]),
-      ...(row === undefined ? [] : [{ label: row.title, href: `/s/${encodeURIComponent(row.id)}` }]),
+      ...(row === undefined ? [] : [{ label: row.workspace, href: `/sessions#${encodeURIComponent(row.workspaceId)}` }]),
+      ...(row === undefined ? [] : [{ label: row.title, href: `/s${'/'}${encodeURIComponent(row.id)}` }]),
     ],
     renderedThrough,
+    // A session with no live agent still reads; it just cannot be prompted.
+    canSend: (row?.actions ?? []).includes('send'),
     asks,
   }
 }

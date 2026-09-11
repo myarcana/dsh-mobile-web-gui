@@ -26,6 +26,11 @@ export function summary (value) {
     running: value.running === true,
     latestSeq: num(value.latestSeq, 'session summary latestSeq'),
     workspace: str(value.workspace, 'session summary workspace'),
+    // The group a row files under. Distinct from `workspace` because two
+    // workspaces may share a display title, and a `cwd:`-derived group is not a
+    // workspace record at all.
+    workspaceId: str(value.workspaceId, 'session summary workspaceId'),
+    workspaceOrder: num(value.workspaceOrder, 'session summary workspaceOrder'),
     lastLine: str(value.lastLine, 'session summary lastLine'),
     time: num(value.time, 'session summary time'),
     actions: Array.isArray(value.actions) ? value.actions.map(a => str(a, 'action')) : fail('actions', value.actions),

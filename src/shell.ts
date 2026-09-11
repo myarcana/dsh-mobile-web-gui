@@ -37,6 +37,13 @@ export interface ShellState {
   readonly crumbs: readonly { readonly label: string; readonly href: string }[]
   /** Last durable seq already present in {@link frames}. */
   readonly renderedThrough: number
+  /**
+   * Whether this view can accept a prompt.
+   *
+   * Only a live agent can, so a session opened from history shows its
+   * transcript and no composer rather than a box whose every send is refused.
+   */
+  readonly canSend: boolean
   /** Questions the focused session is waiting on, so a cold deep link shows them before the stream connects. */
   readonly asks: readonly PendingAsk[]
 }
@@ -62,6 +69,7 @@ export function shell(assets: AssetTable, state: ShellState): { html: string; no
     sessionId: state.sessionId,
     renderedThrough: state.renderedThrough,
     crumbs: state.crumbs,
+    canSend: state.canSend,
     asks: state.asks,
   })
   const html = `<!doctype html>
@@ -81,7 +89,7 @@ ${preloads.join('\n')}
 <main id=log>${state.frames}</main>
 <section id=ask></section>
 <section id=errors></section>
-<form id=composer${state.sessionId === null ? ' hidden' : ''}>
+<form id=composer${state.canSend ? '' : ' hidden'}>
 <textarea id=box rows=1 placeholder="Message this session" enterkeyhint=send></textarea>
 <button id=send type=submit>Send</button>
 </form>

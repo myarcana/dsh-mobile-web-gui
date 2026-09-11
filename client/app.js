@@ -84,7 +84,6 @@ router.start(path => {
   }
   const id = decodeURIComponent(match[1])
   chooser.hide()
-  composer.hidden = false
   // Synchronous read: the switch paints in this frame, with no spinner and no
   // blank. The tail arrives afterwards and appends. Repainting the session
   // already on screen would throw away the server-rendered first paint.
@@ -122,19 +121,33 @@ async function expand (id, seq) {
 
 function retitle () {
   const id = view.current()
+  // A cold session has no live agent to receive a prompt, so it is read-only.
+  // The row's own capability list decides, and the route's server-rendered
+  // answer stands in until the first summary frame arrives.
+  composer.hidden = !canPrompt(id)
   if (id === null) return
   const row = chooser.find(id)
   heading.textContent = row === undefined ? 'Session' : row.title
   crumbs.textContent = ''
-  const up = document.createElement('a')
-  up.href = '/sessions'
-  up.textContent = 'Sessions'
-  crumbs.append(up)
+  const home = document.createElement('a')
+  home.href = '/sessions'
+  home.textContent = 'Sessions'
+  crumbs.append(home)
   if (row !== undefined) {
-    const where = document.createElement('span')
+    // Links back to this session's group on the list, by the group's stable id
+    // rather than its title, which two workspaces may share.
+    const where = document.createElement('a')
+    where.href = '/sessions#' + encodeURIComponent(row.workspaceId)
     where.textContent = row.workspace
     crumbs.append(where)
   }
+}
+
+function canPrompt (id) {
+  if (id === null) return false
+  const row = chooser.find(id)
+  if (row === undefined) return id === boot.sessionId && boot.canSend === true
+  return row.actions.includes('send')
 }
 
 composer.addEventListener('submit', async event => {
