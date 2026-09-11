@@ -95,12 +95,12 @@ ${preloads.join('\n')}
 </header>
 <nav id=crumbs>${state.crumbs.map(crumb =>
     `<a href="${escapeText(crumb.href)}">${escapeText(crumb.label)}</a>`).join('')}</nav>
-<main id=log>${state.frames}</main>
 <div id=tools${state.showTools ? '' : ' hidden'}>
 <button type=button id=new-session>New session</button>
 <button type=button id=new-workspace>New workspace</button>
 </div>
 <section id=dialog></section>
+<main id=log>${state.frames}</main>
 <section id=ask></section>
 <section id=errors></section>
 <form id=composer${state.canSend ? '' : ' hidden'}>
