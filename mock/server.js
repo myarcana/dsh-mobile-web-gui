@@ -30,6 +30,9 @@ const workspaces = new Map([
 const ctx = {
   logger: { info: console.log, warn: console.warn },
   effect () {},
+  // Cordis' safe service accessor: undefined for an unregistered name, which is
+  // how the plugin detects a profile that mounts no gateway or picker.
+  get (name) { return ctx[name] },
   // The optional-dependency idiom the host uses for services a profile may not
   // install. The mock answers it eagerly so grouping and archive filtering are
   // exercised, exactly as they are on the real box.
@@ -70,8 +73,70 @@ const ctx = {
   workspaceRegistry: {
     list: () => [...workspaces.values()]
       .map(w => ({ id: w.id, title: w.title, path: w.path, sessionIds: [...w.sessionIds] })),
-    archivedSessionIds: ['archived-example']
+    get: id => workspaces.get(id),
+    // Mirrors the real registry: adopts an existing directory, idempotently.
+    async create (path) {
+      for (const w of workspaces.values()) if (w.path === path) return w
+      const id = 'ws-' + path.split('/').filter(Boolean).pop()
+      const record = {
+        id,
+        title: path.split('/').filter(Boolean).pop() ?? '/',
+        path,
+        sessionIds: [],
+        async attachSession (sessionId) { this.sessionIds.unshift(sessionId) }
+      }
+      workspaces.set(id, record)
+      return record
+    }
+  },
+  // Stands in for the host API face, so the create path is exercised rather
+  // than the no-gateway fallback.
+  apiProxy: {
+    sessions: {
+      async create (request) {
+        const payload = request.payload
+        const id = payload.sessionId
+        const cwd = payload.cwd ?? '/home/dev'
+        session(id, 'New session', cwd)
+        if (payload.workspaceId !== undefined) owns(payload.workspaceId, id)
+        return { rpcId: request.rpcId, result: { ok: true, value: { sessionId: id } } }
+      }
+    }
+  },
+  // The browse backend: one level at a time, paths never joined by the client.
+  directoryPicker: {
+    capability: () => ({
+      kind: 'browse',
+      async list (path) {
+        const at = path ?? '/home/dev'
+        const here = LISTING[at]
+        if (here === undefined) throw new Error('mock: no listing for ' + at)
+        return {
+          path: at,
+          home: '/home/dev',
+          crumbs: (here.crumbs ?? []).map(name => ({ name, path: name, hidden: false })),
+          entries: here.entries.map(name => ({
+            name,
+            path: at + (at.endsWith('/') ? '' : '/') + name,
+            hidden: name.startsWith('.')
+          })),
+          truncated: false
+        }
+      },
+      async createDirectory (path, name) { return path + (path.endsWith('/') ? '' : '/') + name }
+    })
   }
+}
+
+/** A tiny fake filesystem for the browse backend. */
+const LISTING = {
+  '/': { entries: ['home'], crumbs: ['/'] },
+  '/home': { entries: ['dev'], crumbs: ['/', '/home'] },
+  '/home/dev': { entries: ['.config', 'billing', 'infra', 'new-project', 'other-billing'], crumbs: ['/', '/home', '/home/dev'] },
+  '/home/dev/billing': { entries: [], crumbs: ['/', '/home', '/home/dev', '/home/dev/billing'] },
+  '/home/dev/infra': { entries: [], crumbs: ['/', '/home', '/home/dev', '/home/dev/infra'] },
+  '/home/dev/new-project': { entries: [], crumbs: ['/', '/home', '/home/dev', '/home/dev/new-project'] },
+  '/home/dev/other-billing': { entries: [], crumbs: ['/', '/home', '/home/dev', '/home/dev/other-billing'] }
 }
 
 function emit (name, ...args) {

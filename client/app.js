@@ -13,6 +13,7 @@ import * as errors from 'errors'
 import * as keyboard from 'keyboard'
 import * as wire from 'wire'
 import * as ask from 'ask'
+import * as create from 'create'
 
 const boot = JSON.parse(document.getElementById('boot').textContent)
 const log = document.getElementById('log')
@@ -27,6 +28,7 @@ const drafts = new Map()
 errors.mount(document.getElementById('errors'))
 keyboard.track(composer)
 errors.listen()
+create.mount()
 
 // The server already rendered this route's transcript into the document, so the
 // first paint happened before any of this ran. Adopt it rather than repaint it.
@@ -35,6 +37,13 @@ if (boot.sessionId !== null) {
   store.remember(boot.sessionId, log.innerHTML, boot.renderedThrough)
 }
 ask.render(boot.sessionId, wire.asks(boot.asks))
+create.show(boot.showTools === true)
+
+// A created session is not a log event, so nothing else would take the reader
+// there. Land on the thing they just made; the server pushes the list row.
+create.observe(sessionId => {
+  if (sessionId !== null) router.go('/s/' + encodeURIComponent(sessionId))
+})
 
 await store.boot()
 
@@ -51,6 +60,7 @@ stream.connect({
   token (frame) { view.token(frame) },
   summaries (listing) {
     chooser.update(listing)
+    create.update(listing)
     // The s frames carry each session's latest seq, so a stale cached render is
     // detected before the reader ever taps it.
     for (const row of listing.rows) {
@@ -78,12 +88,14 @@ router.start(path => {
     ask.render(null, undefined)
     chooser.show()
     composer.hidden = true
+    create.show(true)
     heading.textContent = 'Sessions'
     crumbs.textContent = ''
     return
   }
   const id = decodeURIComponent(match[1])
   chooser.hide()
+  create.show(false)
   // Synchronous read: the switch paints in this frame, with no spinner and no
   // blank. The tail arrives afterwards and appends. Repainting the session
   // already on screen would throw away the server-rendered first paint.

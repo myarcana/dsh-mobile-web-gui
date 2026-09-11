@@ -16,6 +16,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { errorChain } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { encoded, type AssetTable } from './assets.ts'
+import { browse, createSession, createWorkspace, makeDirectory } from './create.ts'
 import { toAnswers, type Questions } from './questions.ts'
 import { send } from './send.ts'
 import { expanded, tail } from './sessions.ts'
@@ -51,6 +52,31 @@ export function handler(ctx: Context, assets: AssetTable, hub: StreamHub): Handl
     // needs to know which workspaces exist even when none of them holds a
     // visible session, and the headings are not derivable from the rows.
     if (req.method === 'GET' && path === '/api/sessions') return json(res, await hub.corpus.listing(hub.questions))
+    if (req.method === 'POST' && path === '/api/sessions') {
+      const body = await readJson(req)
+      const workspaceId = typeof body['workspaceId'] === 'string' && body['workspaceId'] !== '' ? body['workspaceId'] : undefined
+      const created = await createSession(ctx, { ...(workspaceId === undefined ? {} : { workspaceId }) })
+      // The new session is not a log event, so nothing would carry it to the
+      // list on its own. Push the listing now, or the reader's tap has no answer.
+      hub.notify()
+      return json(res, created)
+    }
+    if (req.method === 'POST' && path === '/api/workspaces') {
+      const body = await readJson(req)
+      const created = await createWorkspace(ctx, String(body['path'] ?? ''))
+      hub.notify()
+      return json(res, created)
+    }
+    if (req.method === 'GET' && path === '/api/browse') {
+      const at = url.searchParams.get('path')
+      return json(res, await browse(ctx, at === null || at === '' ? undefined : at))
+    }
+    if (req.method === 'POST' && path === '/api/directory') {
+      const body = await readJson(req)
+      const created = await makeDirectory(ctx, String(body['path'] ?? ''), String(body['name'] ?? ''))
+      hub.notify()
+      return json(res, { path: created })
+    }
     const expand = /^\/api\/s\/([^/]+)\/e\/(\d+)$/.exec(path)
     if (req.method === 'GET' && expand !== null) {
       const html = await expanded(ctx, SessionId(decodeURIComponent(expand[1] ?? '')), Number(expand[2]))
@@ -171,6 +197,7 @@ async function resolve(ctx: Context, questions: Questions, url: URL, corpus: Cor
       renderedThrough: -1,
       canSend: false,
       asks: [],
+      showTools: false,
     }
   }
   const transcript = /^\/s\/([^/]+)/.exec(url.pathname)
@@ -183,6 +210,7 @@ async function resolve(ctx: Context, questions: Questions, url: URL, corpus: Cor
       renderedThrough: -1,
       canSend: false,
       asks: [],
+      showTools: true,
     }
   }
   return await transcriptState(ctx, SessionId(decodeURIComponent(transcript[1] ?? '')), rows)
@@ -217,6 +245,8 @@ async function transcriptState(
     // A session with no live agent still reads; it just cannot be prompted.
     canSend: (row?.actions ?? []).includes('send'),
     asks,
+    // Creating is a list-level action, so it lives on the list.
+    showTools: false,
   }
 }
 

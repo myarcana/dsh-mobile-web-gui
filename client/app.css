@@ -64,7 +64,17 @@ h1 {
   text-overflow: ellipsis;
 }
 
-#pick, #send, #ask button {
+/* The create controls, on the list only. display:flex would beat the
+   browser's own [hidden] rule, so each of these states its own. */
+#tools { display: flex; gap: 8px; padding: 8px 0 0; }
+#tools[hidden] { display: none; }
+#dialog:empty { display: none; }
+#dialog { padding-bottom: var(--gap); }
+#dialog form { display: flex; gap: 8px; padding: 6px 0; }
+#dialog form input { flex: 1; min-width: 0; }
+#dialog button.primary { border-color: var(--ink); font-weight: 600; }
+
+#pick, #send, #ask button, #tools button, #dialog button {
   display: flex;
   align-items: center;
   /* 44px minimum tap area, non-negotiable. */

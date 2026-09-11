@@ -237,6 +237,18 @@ export class StreamHub {
   }
 
   /**
+   * Push the session list to every client now.
+   *
+   * For a change that happened outside the log: a session or workspace was just
+   * created, so the corpus version did not move and the next no-op event would
+   * not have carried it. The reader who tapped the button is owed the row that
+   * answers their tap, on this frame rather than the next unrelated one.
+   */
+  notify(): void {
+    void this.refreshSummaries(true)
+  }
+
+  /**
    * Recompute and broadcast session summaries.
    */
   private async refreshSummaries(force = false): Promise<void> {

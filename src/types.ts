@@ -90,6 +90,48 @@ export interface SessionListing {
   readonly groups: readonly WorkspaceGroup[]
 }
 
+/** A session this server just created. */
+export interface CreatedSession {
+  /** Its identity, which is also its route. */
+  readonly sessionId: string
+  /** The workspace it was filed under, or `''` when it went to the host's default directory. */
+  readonly workspaceId: string
+}
+
+/** A workspace this server just registered, or resolved to one that already existed. */
+export interface WorkspaceCreated {
+  readonly workspaceId: string
+  /** The display title, which defaults to the directory's own name. */
+  readonly title: string
+  /** False when the directory was already owned, which makes a double tap harmless. */
+  readonly created: boolean
+}
+
+/** One directory row in the workspace browser. */
+export interface DirectoryRow {
+  /** Base name shown in the row; a root crumb carries its whole path. */
+  readonly name: string
+  /** Absolute host path, so the browser never joins segments itself. */
+  readonly path: string
+  /** Dot-prefixed on this platform. The browser decides whether to show it. */
+  readonly hidden: boolean
+}
+
+/** One directory level, plus the way back up. */
+export interface DirectoryView {
+  readonly path: string
+  /** The host account's home, for a "Home" root on the breadcrumb. */
+  readonly home: string
+  /** Ancestors from the filesystem root to this level, each a jump target. */
+  readonly crumbs: readonly DirectoryRow[]
+  /** Direct children, name-sorted. */
+  readonly entries: readonly DirectoryRow[]
+  /** True when the level holds more children than were reported. */
+  readonly truncated: boolean
+  /** Whether this host can create a folder here at all. */
+  readonly canCreateDirectory: boolean
+}
+
 /** A question an agent is waiting on, as the browser renders it. */
 export interface PendingAsk {
   /** Minted by this server per request; the answer names it, so it can only reach the tool call that asked. */

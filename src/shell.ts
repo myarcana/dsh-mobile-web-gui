@@ -22,7 +22,7 @@ import type { PendingAsk } from './types.ts'
 
 /** Modules the entry point imports directly; leaves take collaborators as arguments. */
 const LEAVES: readonly string[] = [
-  'router', 'stream', 'outbox', 'store', 'view', 'chooser', 'errors', 'time', 'wire', 'keyboard', 'ask',
+  'router', 'stream', 'outbox', 'store', 'view', 'chooser', 'errors', 'time', 'wire', 'keyboard', 'ask', 'create',
 ]
 
 /** What the shell needs to render one route's first paint. */
@@ -46,6 +46,14 @@ export interface ShellState {
   readonly canSend: boolean
   /** Questions the focused session is waiting on, so a cold deep link shows them before the stream connects. */
   readonly asks: readonly PendingAsk[]
+  /**
+   * Whether this route offers the create controls.
+   *
+   * Only the session list does. A transcript is a view of one session, and
+   * putting "new session" beside its message box would be two answers to the
+   * same question on one screen.
+   */
+  readonly showTools: boolean
 }
 
 /**
@@ -71,6 +79,7 @@ export function shell(assets: AssetTable, state: ShellState): { html: string; no
     crumbs: state.crumbs,
     canSend: state.canSend,
     asks: state.asks,
+    showTools: state.showTools,
   })
   const html = `<!doctype html>
 <html lang=en>
@@ -87,6 +96,11 @@ ${preloads.join('\n')}
 <nav id=crumbs>${state.crumbs.map(crumb =>
     `<a href="${escapeText(crumb.href)}">${escapeText(crumb.label)}</a>`).join('')}</nav>
 <main id=log>${state.frames}</main>
+<div id=tools${state.showTools ? '' : ' hidden'}>
+<button type=button id=new-session>New session</button>
+<button type=button id=new-workspace>New workspace</button>
+</div>
+<section id=dialog></section>
 <section id=ask></section>
 <section id=errors></section>
 <form id=composer${state.canSend ? '' : ' hidden'}>
