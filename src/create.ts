@@ -74,24 +74,42 @@ interface DefaultModel {
   currentSelection(): { readonly provider: string; readonly model: string }
 }
 
+/** The id shape this server accepts from a caller: a prefix and a UUID's worth of hex, never a path segment that could escape a directory. */
+const CALLER_SESSION_ID = /^session-[A-Za-z0-9-]{8,64}$/
+
 /**
  * Create one session, filed under a workspace when the caller named one.
  *
- * The id is minted here and sent with the request, which is what makes a retry
- * safe: the host resolves the same id to the same session instead of making a
- * second one, so a lost response cannot cost a duplicate.
+ * The id is resolved here and sent with the request, which is what makes a
+ * retry safe: the host resolves a known id to the same session instead of
+ * making a second one, so a lost response cannot cost a duplicate.
+ *
+ * A caller may name the id itself. That is what lets the browser keep one id
+ * for a create it is still waiting on: a second tap, or a retry after a dropped
+ * response, carries the same id and lands on the same session rather than
+ * minting another. When the caller names none, one is minted here.
  * @param ctx - the plugin context.
- * @param options - the workspace to file it under, when one was named.
+ * @param options - the workspace to file it under, and the caller's own id when it has one.
  * @returns the new session and the workspace it landed in.
- * @throws Error when the named workspace is unknown, or the host refuses the create.
+ * @throws Error when the named workspace is unknown, the id is malformed, or the host refuses the create.
  */
-export async function createSession(ctx: Context, options: { readonly workspaceId?: string }): Promise<CreatedSession> {
+export async function createSession(
+  ctx: Context,
+  options: { readonly workspaceId?: string; readonly sessionId?: string },
+): Promise<CreatedSession> {
   const registry = ctx.get('workspaceRegistry') as Registry | undefined
   const workspace = options.workspaceId === undefined ? undefined : registry?.get(options.workspaceId)
   if (options.workspaceId !== undefined && workspace === undefined) {
     throw new Error(`no workspace '${options.workspaceId}' is registered`)
   }
-  const sessionId = `session-${randomUUID()}`
+  // A caller-supplied id is validated rather than trusted: it becomes a
+  // directory name on disk, so a value carrying a separator or a parent
+  // reference must be refused here, with the caller's own blame, before it
+  // reaches the host.
+  if (options.sessionId !== undefined && !CALLER_SESSION_ID.test(options.sessionId)) {
+    throw new Error(`invalid session id '${options.sessionId}'`)
+  }
+  const sessionId = options.sessionId ?? `session-${randomUUID()}`
   const gateway = ctx.get('apiProxy') as Gateway | undefined
   if (gateway !== undefined) {
     // Exactly one of the two: the request schema refuses both, because a

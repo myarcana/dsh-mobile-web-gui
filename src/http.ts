@@ -55,7 +55,14 @@ export function handler(ctx: Context, assets: AssetTable, hub: StreamHub): Handl
     if (req.method === 'POST' && path === '/api/sessions') {
       const body = await readJson(req)
       const workspaceId = typeof body['workspaceId'] === 'string' && body['workspaceId'] !== '' ? body['workspaceId'] : undefined
-      const created = await createSession(ctx, { ...(workspaceId === undefined ? {} : { workspaceId }) })
+      // A caller may name the id, so a retry after a lost response resolves to
+      // the session it already made instead of making a second one. Shape is
+      // checked in `createSession`, which owns the id's meaning.
+      const sessionId = typeof body['sessionId'] === 'string' && body['sessionId'] !== '' ? body['sessionId'] : undefined
+      const created = await createSession(ctx, {
+        ...(workspaceId === undefined ? {} : { workspaceId }),
+        ...(sessionId === undefined ? {} : { sessionId }),
+      })
       // The new session is not a log event, so nothing would carry it to the
       // list on its own. Push the listing now, or the reader's tap has no answer.
       hub.notify()

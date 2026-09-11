@@ -80,6 +80,10 @@ stream.connect({
 })
 
 router.start(path => {
+  // The dialog element is shared by every route, so a status line left behind
+  // by a finished create would otherwise survive the navigation and appear on
+  // whichever session opens next.
+  create.reset()
   const event = /^\/s\/([^/]+)\/e\/(\d+)$/.exec(path)
   if (event !== null) return expand(event[1], event[2])
   const match = /^\/s\/([^/]+)/.exec(path)

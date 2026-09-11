@@ -1,3 +1,5 @@
+import { mintId } from 'store'
+
 // Creating things: a session, and a workspace.
 //
 // Both are one deliberate tap followed by a plain form. Nothing here is a
@@ -7,6 +9,19 @@
 // A failure is shown verbatim. The host's own message says why a create was
 // refused, and paraphrasing it here would cost the reader the one sentence that
 // explains the problem.
+
+// A create is one intent, not one request. The id is reserved before the first
+// attempt and reused until it succeeds, so a second tap, or a retry after a
+// response the link ate, resolves to the session already made instead of
+// minting a duplicate. Clearing it on the key change is what lets a genuinely
+// different request — another workspace — get its own session.
+let pending = null
+
+function reservedId (workspaceId) {
+  const key = workspaceId ?? ''
+  if (pending === null || pending.key !== key) pending = { key, sessionId: 'session-' + mintId() }
+  return pending.sessionId
+}
 
 const tools = document.getElementById('tools')
 const dialog = document.getElementById('dialog')
@@ -35,6 +50,14 @@ export function mount () {
 // repaint.
 export function show (visible) {
   if (tools !== null) tools.hidden = !visible
+}
+
+// Drop whatever the dialog is holding. Called on every route change, because
+// the dialog lives on every route: a status line left here by a finished
+// create would otherwise ride along with the tab and show up on whatever
+// session the reader opens next.
+export function reset () {
+  clear()
 }
 
 function clear () {
@@ -106,15 +129,31 @@ function pickWorkspace () {
 }
 
 async function create (workspaceId) {
+  const sessionId = reservedId(workspaceId)
   clear()
   note('Creating…', 'state')
   try {
-    const created = await post('/api/sessions', workspaceId === undefined ? {} : { workspaceId })
+    const created = await post('/api/sessions', {
+      ...(workspaceId === undefined ? {} : { workspaceId }),
+      sessionId
+    })
+    // The reservation is spent, so the next create is a new intent rather than
+    // a retry of this one.
+    pending = null
+    // The hand-off does not clear this dialog: the router only hides the tools,
+    // so without this the success path is the one that forgets to clean up and
+    // leaves "Creating…" on screen for good.
+    clear()
     onCreated(created.sessionId)
   } catch (error) {
     clear()
     title('New session')
     failed(error)
+    // The reservation survives the failure, so trying again asks for the very
+    // session this attempt may already have made.
+    if (pending !== null && pending.key === (workspaceId ?? '')) {
+      dialog.append(button('Try again', () => create(workspaceId), true))
+    }
     dialog.append(cancel())
   }
 }
