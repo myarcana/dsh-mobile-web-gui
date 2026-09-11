@@ -58,7 +58,7 @@ function start () {
   })
   source.addEventListener('s', event => {
     lastFrameAt = Date.now()
-    handlers.summaries(wire.summaries(JSON.parse(event.data)))
+    handlers.summaries(wire.listing(JSON.parse(event.data)))
   })
   source.addEventListener('t', event => {
     lastFrameAt = Date.now()

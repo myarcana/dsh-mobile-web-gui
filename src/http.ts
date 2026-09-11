@@ -47,7 +47,10 @@ export function handler(ctx: Context, assets: AssetTable, hub: StreamHub): Handl
       const header = req.headers['last-event-id']
       return hub.attach(res, typeof header === 'string' ? header : undefined, controller.signal)
     }
-    if (req.method === 'GET' && path === '/api/sessions') return json(res, await hub.corpus.rows(hub.questions))
+    // The complete listing, headings included: a client that asked for the list
+    // needs to know which workspaces exist even when none of them holds a
+    // visible session, and the headings are not derivable from the rows.
+    if (req.method === 'GET' && path === '/api/sessions') return json(res, await hub.corpus.listing(hub.questions))
     const expand = /^\/api\/s\/([^/]+)\/e\/(\d+)$/.exec(path)
     if (req.method === 'GET' && expand !== null) {
       const html = await expanded(ctx, SessionId(decodeURIComponent(expand[1] ?? '')), Number(expand[2]))

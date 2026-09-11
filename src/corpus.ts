@@ -23,7 +23,7 @@ import type { SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
 import type { SessionRecord } from '@deepseek-ai/dsh-session-query'
 import type { Workspace } from '@deepseek-ai/dsh-workspace'
 import type { Questions } from './questions.ts'
-import type { SessionSummary } from './types.ts'
+import type { SessionListing, SessionSummary, WorkspaceGroup } from './types.ts'
 
 /** Longest preview line kept on a row. */
 const LAST_LINE_MAX = 120
@@ -43,13 +43,6 @@ interface Derived {
   readonly lastLine: string
   readonly time: number
   readonly seq: number
-}
-
-/** The workspace a row is filed under. */
-interface GroupRef {
-  readonly id: string
-  readonly title: string
-  readonly order: number
 }
 
 /** A row with nothing derived yet, which is a real state rather than a failure. */
@@ -90,7 +83,7 @@ export class Corpus {
    * every request forever, re-reading nothing each time.
    */
   private readonly unattemptable = new Set<string>()
-  private listing: readonly SessionRecord[] = []
+  private snapshot: readonly SessionRecord[] = []
   private listedAt = 0
   private pumping = false
 
@@ -143,14 +136,32 @@ export class Corpus {
    * @returns one row per session, ready to group by `workspaceId`.
    */
   async rows(questions: Questions): Promise<SessionSummary[]> {
+    return (await this.listing(questions)).rows
+  }
+
+  /**
+   * The rows, and every heading they file under.
+   *
+   * The headings are the registry's own workspaces, including ones holding no
+   * visible session. Deriving them from rows instead made an empty workspace
+   * disappear, so a project the reader had registered but not yet worked in
+   * looked like it did not exist. The desktop UI lists every workspace for the
+   * same reason.
+   *
+   * Never waits for a log read it has not already done: the first paint carries
+   * whatever is cached, and the pump's completion pushes the rest.
+   * @param questions - the questions this server is holding, for the ask badges.
+   * @returns every row and every heading to render.
+   */
+  async listing(questions: Questions): Promise<SessionListing> {
     const records = await this.records()
     const archived = this.archived()
-    const groups = this.groups(records)
+    const { bySession, ordered } = this.grouping(records, archived)
     const rows: SessionSummary[] = []
     for (const record of records) {
       const id = record.header.id
       if (archived.has(id)) continue
-      const group = groups.get(id) ?? this.fallback(record.header)
+      const group = bySession.get(id) ?? this.fallback(record.header)
       const derived = this.derived.get(id) ?? underived(record.header)
       const agent = this.ctx.agents.get(id)
       rows.push({
@@ -171,7 +182,7 @@ export class Corpus {
       this.want(record)
     }
     rows.sort((left, right) => right.time - left.time)
-    return rows
+    return { rows, groups: ordered }
   }
 
   /**
@@ -183,15 +194,15 @@ export class Corpus {
    */
   private async records(): Promise<readonly SessionRecord[]> {
     const now = Date.now()
-    if (this.listing.length === 0 || now - this.listedAt >= LISTING_TTL_MS) {
-      this.listing = await this.ctx.sessionQuery.listSessions()
+    if (this.snapshot.length === 0 || now - this.listedAt >= LISTING_TTL_MS) {
+      this.snapshot = await this.ctx.sessionQuery.listSessions()
       this.listedAt = now
     }
-    const known = new Set(this.listing.map(record => record.header.id))
-    let merged: readonly SessionRecord[] = this.listing
+    const known = new Set(this.snapshot.map(record => record.header.id))
+    let merged: readonly SessionRecord[] = this.snapshot
     for (const agent of this.ctx.agents.roots()) {
       if (known.has(agent.session.id)) continue
-      if (merged === this.listing) merged = [...this.listing]
+      if (merged === this.snapshot) merged = [...this.snapshot]
       ;(merged as SessionRecord[]).push({ header: agent.session.header, live: true, persisted: false })
     }
     return merged
@@ -214,17 +225,29 @@ export class Corpus {
    * from raw path strings would disagree with it on symlinks and trailing
    * separators. A session no record owns still appears, grouped by its own
    * directory after every real workspace.
+   *
+   * Every registry workspace becomes a group even when nothing is filed under
+   * it, so the headings follow the reader's own workspaces rather than the logs
+   * that happen to exist today.
    * @param records - the sessions being listed.
-   * @returns a group for each session id.
+   * @param archived - the archive set, so a directory known only for archived work is not a heading.
+   * @returns the group for each session id, and every group in render order.
    */
-  private groups(records: readonly SessionRecord[]): Map<string, GroupRef> {
-    const bySession = new Map<string, GroupRef>()
+  private grouping(records: readonly SessionRecord[], archived: ReadonlySet<string>): {
+    readonly bySession: Map<string, WorkspaceGroup>
+    readonly ordered: WorkspaceGroup[]
+  } {
+    const bySession = new Map<string, WorkspaceGroup>()
     const owned = new Set<string>()
     const workspaces = this.registry?.list() ?? []
-    const byPath = new Map<string, GroupRef>()
+    const byPath = new Map<string, WorkspaceGroup>()
+    const ordered: WorkspaceGroup[] = []
     workspaces.forEach((workspace, index) => {
-      const ref: GroupRef = { id: workspace.id, title: workspace.title, order: index }
+      const ref: WorkspaceGroup = { id: workspace.id, title: workspace.title, order: index }
       byPath.set(normalizePath(workspace.path), ref)
+      // Listed before its members are counted: an empty workspace is still a
+      // heading the reader expects to see.
+      ordered.push(ref)
       for (const id of workspace.sessionIds) {
         bySession.set(id, ref)
         owned.add(id)
@@ -233,6 +256,13 @@ export class Corpus {
     const orphans = new Map<string, SessionRecord[]>()
     for (const record of records) {
       if (owned.has(record.header.id)) continue
+      // An archived session is not a reason to show a directory. A workspace the
+      // reader created keeps its heading when empty, but a `cwd:` group is
+      // inferred from the logs alone — so a directory whose every session has
+      // been archived is not a place with nothing in it, it is not a place at
+      // all. Showing it would put junk headings (`/root`, `~/.dsh`) on a list
+      // the reader never asked about.
+      if (archived.has(record.header.id)) continue
       // Same directory, different id spelling. The registry's account and the
       // corpus's headers do not always agree on a session's id (some are stored
       // with a `session-` prefix and some without), so matching on the id alone
@@ -254,18 +284,19 @@ export class Corpus {
     }
     const sorted = [...orphans.keys()].sort()
     sorted.forEach((cwd, index) => {
-      const ref: GroupRef = {
+      const ref: WorkspaceGroup = {
         id: cwd === '' ? '' : `cwd:${cwd}`,
         title: cwd === '' ? 'No working directory' : basename(cwd),
         order: UNGROUPED_ORDER + index,
       }
+      ordered.push(ref)
       for (const record of orphans.get(cwd) ?? []) bySession.set(record.header.id, ref)
     })
-    return bySession
+    return { bySession, ordered }
   }
 
   /** The group for a session the table did not cover. */
-  private fallback(header: SessionHeader): GroupRef {
+  private fallback(header: SessionHeader): WorkspaceGroup {
     const cwd = header.cwd ?? ''
     return {
       id: cwd === '' ? '' : `cwd:${cwd}`,
@@ -329,7 +360,7 @@ export class Corpus {
 
   /** The header the listing holds for one session, which the read path needs for its fallback. */
   private headerOf(id: string): SessionHeader | undefined {
-    for (const record of this.listing) if (record.header.id === id) return record.header
+    for (const record of this.snapshot) if (record.header.id === id) return record.header
     return this.ctx.agents.get(id)?.session.header
   }
 

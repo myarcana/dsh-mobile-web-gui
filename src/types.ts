@@ -65,6 +65,31 @@ export interface SessionSummary {
   readonly asks: readonly PendingAsk[]
 }
 
+/**
+ * One workspace heading on the session list.
+ *
+ * A group exists whether or not it holds a visible session: a workspace is a
+ * durable record the reader created, not a consequence of what happens to have
+ * a log. Carrying the headings on the wire is what lets an empty workspace stay
+ * on screen instead of vanishing.
+ */
+export interface WorkspaceGroup {
+  /** The workspace record's id, or a `cwd:`-prefixed directory for a session no record owns. */
+  readonly id: string
+  /** The heading text, which two workspaces may legitimately share. */
+  readonly title: string
+  /** Where this heading sorts, lowest first. */
+  readonly order: number
+}
+
+/** One session-list frame: every heading in render order, and every visible row. */
+export interface SessionListing {
+  /** The rows, newest first, each naming its group by {@link SessionSummary.workspaceId}. */
+  readonly rows: readonly SessionSummary[]
+  /** Every heading to render, in order, including ones with no rows. */
+  readonly groups: readonly WorkspaceGroup[]
+}
+
 /** A question an agent is waiting on, as the browser renders it. */
 export interface PendingAsk {
   /** Minted by this server per request; the answer names it, so it can only reach the tool call that asked. */

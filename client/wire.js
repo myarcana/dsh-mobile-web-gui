@@ -71,6 +71,32 @@ export function summaries (value) {
   return value.map(summary)
 }
 
+/**
+ * One session-list frame.
+ *
+ * The headings ride with the rows because they are not derivable from them: a
+ * workspace with no visible session still has a heading, and the reader's own
+ * registry order is the one the desktop UI shows.
+ */
+export function listing (value) {
+  if (typeof value !== 'object' || value === null) fail('session listing', value)
+  const groups = value.groups
+  if (!Array.isArray(groups)) fail('session listing groups', groups)
+  return {
+    rows: summaries(value.rows),
+    groups: groups.map(group)
+  }
+}
+
+function group (value) {
+  if (typeof value !== 'object' || value === null) fail('workspace group', value)
+  return {
+    id: str(value.id, 'workspace group id'),
+    title: str(value.title, 'workspace group title'),
+    order: num(value.order, 'workspace group order')
+  }
+}
+
 export function eventFrame (value) {
   if (typeof value !== 'object' || value === null) fail('event frame', value)
   return {

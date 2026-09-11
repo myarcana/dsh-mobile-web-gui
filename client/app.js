@@ -49,11 +49,11 @@ stream.connect({
     if (frame.sessionId === view.current()) view.append(frame)
   },
   token (frame) { view.token(frame) },
-  summaries (rows) {
-    chooser.update(rows)
+  summaries (listing) {
+    chooser.update(listing)
     // The s frames carry each session's latest seq, so a stale cached render is
     // detected before the reader ever taps it.
-    for (const row of rows) {
+    for (const row of listing.rows) {
       if (store.invalidateIfAhead(row.id, row.latestSeq) && row.id === view.current()) {
         view.open(row.id, undefined)
         stream.focus(row.id, -1)

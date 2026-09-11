@@ -16,8 +16,12 @@ const PORT = Number(process.env.PORT ?? 7788)
 const hooks = new Map()
 const sessions = new Map()
 // Two records sharing a display title, which is legal, plus one session no
-// record owns — the three grouping cases worth seeing on screen.
+// record owns — the three grouping cases worth seeing on screen. `ws-new` is
+// deliberate: a workspace holding no sessions must still render a heading, so
+// the case the real box hit (a registered project with no work in it yet) is
+// exercised here rather than only in production.
 const workspaces = new Map([
+  ['ws-new', { id: 'ws-new', title: 'new-project', path: '/home/dev/new-project', sessionIds: [] }],
   ['ws-billing', { id: 'ws-billing', title: 'billing', path: '/home/dev/billing', sessionIds: [] }],
   ['ws-infra', { id: 'ws-infra', title: 'infra', path: '/home/dev/infra', sessionIds: [] }],
   ['ws-other', { id: 'ws-other', title: 'billing', path: '/home/dev/other-billing', sessionIds: [] }]

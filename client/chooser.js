@@ -1,20 +1,27 @@
 // The chooser is a view, not furniture. It answers the question that matters
 // when a box holds hundreds of sessions: where did that work happen?
 //
+// The headings come from the server, which takes them from the workspace
+// registry — the reader's own durable list. Deriving them from the rows instead
+// made a workspace with nothing in it vanish from the screen, so a project that
+// had been registered but not yet worked in looked like it did not exist.
+//
 // Rows arrive newest-first from the server and stay in that order inside each
-// group, so the most recent session in a workspace is the first thing under its
-// heading. Group order is the durable registry order, which is what the desktop
-// UI shows — re-deriving one from activity would make the two disagree.
+// section, so the most recent session in a workspace is the first thing under
+// its heading. Heading order is the registry's durable order, which is what the
+// desktop UI shows — re-deriving one from activity would make the two disagree.
 
 import { stamp } from 'time'
 
 const log = document.getElementById('log')
 
 let rows = []
+let headings = []
 let showing = false
 
-export function update (next) {
-  rows = next
+export function update (listing) {
+  rows = listing.rows
+  headings = listing.groups
   if (showing) paint()
 }
 
@@ -35,40 +42,56 @@ export function hide () {
   showing = false
 }
 
-// Group without reordering: first appearance wins, so a group's position is its
-// best-placed row's and the time ordering inside it survives untouched.
-function grouped () {
-  const groups = []
-  const seen = new Map()
-  for (const row of rows) {
-    let group = seen.get(row.workspaceId)
-    if (group === undefined) {
-      group = { id: row.workspaceId, title: row.workspace, order: row.workspaceOrder, rows: [] }
-      seen.set(row.workspaceId, group)
-      groups.push(group)
-    }
-    group.rows.push(row)
+// Every heading the server sent, in its order, then any group a row names that
+// the server's list did not carry. A row is the reason this screen exists, so
+// it must never disappear because its heading is missing from the list.
+function sections () {
+  const byId = new Map()
+  const sections = []
+  for (const group of headings) {
+    const section = { id: group.id, title: group.title, order: group.order, rows: [] }
+    byId.set(group.id, section)
+    sections.push(section)
   }
-  return groups.sort((left, right) => left.order - right.order
+  for (const row of rows) {
+    let section = byId.get(row.workspaceId)
+    if (section === undefined) {
+      section = { id: row.workspaceId, title: row.workspace, order: row.workspaceOrder, rows: [] }
+      byId.set(row.workspaceId, section)
+      sections.push(section)
+    }
+    section.rows.push(row)
+  }
+  return sections.sort((left, right) => left.order - right.order
     || left.title.localeCompare(right.title)
     || left.id.localeCompare(right.id))
 }
 
 function paint () {
   log.innerHTML = ''
-  if (rows.length === 0) {
+  const groups = sections()
+  if (groups.length === 0) {
     const empty = document.createElement('p')
     empty.textContent = 'No sessions.'
     log.append(empty)
     return
   }
-  for (const group of grouped()) {
+  for (const group of groups) {
     const heading = document.createElement('h2')
     heading.className = 'group'
     // Anchored so a breadcrumb can link back to the workspace a session is in.
     if (group.id !== '') heading.id = group.id
     heading.textContent = group.title
     log.append(heading)
+    // A workspace with nothing in it is a real answer, not a gap: say so under
+    // its heading rather than leaving the heading looking like a failed render.
+    if (group.rows.length === 0) {
+      const none = document.createElement('p')
+      none.className = 'state'
+      none.textContent = 'No sessions yet.'
+      log.append(none)
+      continue
+    }
     for (const row of group.rows) log.append(item(row))
   }
 }

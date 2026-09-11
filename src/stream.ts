@@ -246,10 +246,10 @@ export class StreamHub {
     if (!force && this.corpus.version === this.sentVersion) return
     this.sentVersion = this.corpus.version
     this.summarySeq += 1
-    const rows = await this.corpus.rows(this.questions)
+    const listing = await this.corpus.listing(this.questions)
     for (const client of this.clients) {
       client.summarySeq = this.summarySeq
-      this.send(client, 's', rows, cursor(this.epoch, client, client.focus, null))
+      this.send(client, 's', listing, cursor(this.epoch, client, client.focus, null))
     }
   }
 
@@ -262,7 +262,7 @@ export class StreamHub {
     // This client just received the current rows, so the next no-op event must
     // not re-broadcast them to everyone.
     this.sentVersion = this.corpus.version
-    this.send(client, 's', await this.corpus.rows(this.questions), cursor(this.epoch, client, client.focus, null))
+    this.send(client, 's', await this.corpus.listing(this.questions), cursor(this.epoch, client, client.focus, null))
   }
 
   /**
