@@ -1,0 +1,11 @@
+# The only row this bundle contributes: the web GUI on its own listener.
+# No config here, so the plugin's schema defaults apply (port 7777, host '::').
+# To change them, restate this row in the profile's own cordis.patch.yml:
+#
+# - id: web-gui
+#   config:
+#     port: 7777
+#     host: '::'
+- insert:
+    - id: web-gui
+      name: dsh-mobile-web-gui
