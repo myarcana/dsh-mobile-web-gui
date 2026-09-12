@@ -32,6 +32,9 @@ export function summary (value) {
     workspaceId: str(value.workspaceId, 'session summary workspaceId'),
     workspaceOrder: num(value.workspaceOrder, 'session summary workspaceOrder'),
     lastLine: str(value.lastLine, 'session summary lastLine'),
+    // True only once the whole log has been read and held no message. An unread
+    // session reports false, so a row never claims emptiness it has not checked.
+    empty: value.empty === true,
     time: num(value.time, 'session summary time'),
     actions: Array.isArray(value.actions) ? value.actions.map(a => str(a, 'action')) : fail('actions', value.actions),
     asks: asks(value.asks)
@@ -103,7 +106,10 @@ export function eventFrame (value) {
     sessionId: str(value.sessionId, 'event frame sessionId'),
     seq: num(value.seq, 'event frame seq'),
     html: str(value.html, 'event frame html'),
-    replace: value.replace === true
+    replace: value.replace === true,
+    // Only a replace frame carries it, because only a whole-tail read can say a
+    // session holds nothing. A live frame leaves it false.
+    empty: value.empty === true
   }
 }
 

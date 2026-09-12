@@ -284,8 +284,8 @@ export class StreamHub {
    * @param from - exclusive lower bound the client already holds.
    */
   private async sendTail(client: Client, id: SessionId, from: number): Promise<void> {
-    const { html, renderedThrough } = await tail(this.ctx, id, from)
-    this.send(client, 'e', { sessionId: id, seq: renderedThrough, html, replace: from < 0 },
+    const { html, renderedThrough, empty } = await tail(this.ctx, id, from)
+    this.send(client, 'e', { sessionId: id, seq: renderedThrough, html, replace: from < 0, empty },
       cursor(this.epoch, client, id, renderedThrough))
   }
 

@@ -37,6 +37,14 @@ export interface ShellState {
   readonly crumbs: readonly { readonly label: string; readonly href: string }[]
   /** Last durable seq already present in {@link frames}. */
   readonly renderedThrough: number
+  /**
+   * Whether the focused session's whole log holds no transcript at all.
+   *
+   * A blank transcript is otherwise ambiguous — a session with nothing in it and
+   * one whose content has not arrived look identical. This is what lets the
+   * first paint say which it is.
+   */
+  readonly empty: boolean
   /** Questions the focused session is waiting on, so a cold deep link shows them before the stream connects. */
   readonly asks: readonly PendingAsk[]
   /**
@@ -69,6 +77,7 @@ export function shell(assets: AssetTable, state: ShellState): { html: string; no
   const boot = JSON.stringify({
     sessionId: state.sessionId,
     renderedThrough: state.renderedThrough,
+    empty: state.empty,
     crumbs: state.crumbs,
     asks: state.asks,
     showTools: state.showTools,
@@ -92,7 +101,7 @@ ${preloads.join('\n')}
 <button type=button id=new-workspace>New workspace</button>
 </div>
 <section id=dialog></section>
-<main id=log>${state.frames}</main>
+<main id=log>${state.frames}${state.empty ? '<p class=state data-notice=empty>This session has no messages yet.</p>' : ''}</main>
 <section id=ask></section>
 <section id=errors></section>
 <form id=composer${state.sessionId === null ? ' hidden' : ''}>

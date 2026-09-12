@@ -51,6 +51,15 @@ export interface SessionSummary {
   readonly workspaceOrder: number
   /** One line of the most recent content. */
   readonly lastLine: string
+  /**
+   * Whether this session is known to hold no messages at all.
+   *
+   * False while the log has not been read yet, so a row never claims emptiness
+   * on the strength of a read that has not happened. This is what lets the list
+   * say a session has no messages instead of showing a blank preview line that
+   * reads as a failed render.
+   */
+  readonly empty: boolean
   /** Epoch milliseconds of the last durable event. */
   readonly time: number
   /**
@@ -146,6 +155,14 @@ export interface EventFrame {
   readonly seq: number
   /** One `<article>` produced by the serializer. */
   readonly html: string
+  /**
+   * True when a full read found nothing renderable in the whole log.
+   *
+   * Only a full read — a `replace` — can answer this, because a tail window
+   * that happened to hold no frames says nothing about the log behind it.
+   * Absent on live per-event frames, where it carries no meaning.
+   */
+  readonly empty?: boolean
 }
 
 /** A coalesced live token snapshot. Ephemeral: never carries an SSE `id:`. */

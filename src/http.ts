@@ -202,6 +202,7 @@ async function resolve(ctx: Context, questions: Questions, url: URL, corpus: Cor
         { label: `Event ${seq}`, href: url.pathname },
       ],
       renderedThrough: -1,
+      empty: false,
       asks: [],
       showTools: false,
     }
@@ -214,6 +215,7 @@ async function resolve(ctx: Context, questions: Questions, url: URL, corpus: Cor
       title: 'Sessions',
       crumbs: [{ label: 'Sessions', href: '/sessions' }],
       renderedThrough: -1,
+      empty: false,
       asks: [],
       showTools: true,
     }
@@ -234,7 +236,7 @@ async function transcriptState(
   rows: readonly SessionSummary[],
 ): Promise<ShellState> {
   const row = rows.find(candidate => candidate.id === id)
-  const { html, renderedThrough } = await tail(ctx, id, -1)
+  const { html, renderedThrough, empty } = await tail(ctx, id, -1)
   const asks = row?.asks ?? []
   return {
     frames: html,
@@ -247,6 +249,7 @@ async function transcriptState(
       ...(row === undefined ? [] : [{ label: row.title, href: `/s${'/'}${encodeURIComponent(row.id)}` }]),
     ],
     renderedThrough,
+    empty,
     asks,
     // Creating is a list-level action, so it lives on the list.
     showTools: false,

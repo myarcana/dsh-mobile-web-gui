@@ -104,9 +104,21 @@ function item (row) {
   // Specific, never a generic label: this session's own title.
   title.textContent = row.title
   const line = document.createElement('span')
-  line.textContent = row.asks.length > 0
-    ? 'Waiting for your answer · ' + row.lastLine
-    : row.running ? 'Working · ' + row.lastLine : row.lastLine
+  line.textContent = preview(row)
   link.append(title, line, stamp(row.time))
   return link
+}
+
+// What a row says under its title.
+//
+// A session known to hold no messages says so, because a blank line there reads
+// as a failed render rather than as an empty session. A session whose log has
+// not been read yet claims nothing: it is not known to be empty, and naming it
+// so would be a claim the server never made. The dot only joins a prefix to
+// text that is actually present, so no row ends in a dangling separator.
+function preview (row) {
+  if (row.empty) return 'No messages yet'
+  if (row.lastLine === '') return ''
+  if (row.asks.length > 0) return 'Waiting for your answer · ' + row.lastLine
+  return row.running ? 'Working · ' + row.lastLine : row.lastLine
 }

@@ -23,6 +23,7 @@ import type { SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
 import type { SessionRecord } from '@deepseek-ai/dsh-session-query'
 import type { Workspace } from '@deepseek-ai/dsh-workspace'
 import type { Questions } from './questions.ts'
+import { renderEvent } from './render.ts'
 import type { SessionListing, SessionSummary, WorkspaceGroup } from './types.ts'
 
 /** Longest preview line kept on a row. */
@@ -41,13 +42,21 @@ const UNGROUPED_ORDER = 1_000_000
 interface Derived {
   readonly title: string
   readonly lastLine: string
+  /**
+   * Whether the read log renders no transcript frame at all.
+   *
+   * False when the log has not been read: a row must never claim a session is
+   * empty on the strength of a read that has not happened, or a session that is
+   * merely unread would look the same as one with nothing in it.
+   */
+  readonly empty: boolean
   readonly time: number
   readonly seq: number
 }
 
 /** A row with nothing derived yet, which is a real state rather than a failure. */
 function underived(header: SessionHeader): Derived {
-  return { title: '', lastLine: '', time: header.createdAt, seq: -1 }
+  return { title: '', lastLine: '', empty: false, time: header.createdAt, seq: -1 }
 }
 
 /** The workspace registry surface this plugin reads. Structural, so the plugin never imports the package. */
@@ -173,6 +182,7 @@ export class Corpus {
         workspaceId: group.id,
         workspaceOrder: group.order,
         lastLine: derived.lastLine,
+        empty: derived.empty,
         time: derived.time,
         // Every visible session accepts a prompt. A cold one — a log with no
         // live agent, which is every session after a restart — is resumed when
@@ -428,7 +438,12 @@ function summarize(header: SessionHeader, events: readonly SessionEvent[]): Deri
     }
     if (event.seq > seq) seq = event.seq
   }
-  return { title, lastLine, time, seq }
+  // A preview line proves content, so the expensive check is only reached for
+  // logs with no message text — the short boot stubs, which are cheap to scan.
+  // It asks the same question the transcript asks, so a row and its own page
+  // can never disagree about whether the session is empty.
+  const empty = lastLine === '' && !events.some(event => renderEvent(event, header.id) !== null)
+  return { title, lastLine, empty, time, seq }
 }
 
 /**

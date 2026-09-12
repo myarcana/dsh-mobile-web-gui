@@ -25,21 +25,28 @@ export const TAIL_LIMIT = 400
  * @param ctx - the plugin context.
  * @param id - the session to read.
  * @param from - exclusive lower bound; `-1` reads from the beginning of the tail window.
- * @returns the frames' HTML and the last seq they cover.
+ * @returns the frames' HTML, the last seq they cover, and whether the whole log holds nothing.
  */
 export async function tail(
   ctx: Context,
   id: SessionId,
   from: number,
-): Promise<{ html: string; renderedThrough: number }> {
+): Promise<{ html: string; renderedThrough: number; empty: boolean }> {
   const events = (await ctx.sessionQuery.readSession(id)).events
   const after = events.filter(event => event.seq > from)
   // Never materialize a full log for a client that asked for the tail.
   const window = after.length > TAIL_LIMIT ? after.slice(after.length - TAIL_LIMIT) : after
   let html = ''
   for (const event of window) html += renderEvent(event, id) ?? ''
+  // A full read that produced no frame at all means the session has no
+  // transcript, which is a different screen from one whose tail has not arrived
+  // yet. Only a full read can answer it: a tail window that happened to hold no
+  // frames says nothing about the log behind it. The second scan runs only in
+  // that one case and stops at the first renderable event, so the ordinary
+  // paths pay nothing for it.
+  const empty = from < 0 && html === '' && !events.some(event => renderEvent(event, id) !== null)
   const last = events.at(-1)
-  return { html, renderedThrough: last === undefined ? -1 : last.seq }
+  return { html, renderedThrough: last === undefined ? -1 : last.seq, empty }
 }
 
 /**

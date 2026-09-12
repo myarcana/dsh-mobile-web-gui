@@ -33,8 +33,11 @@ create.mount()
 // The server already rendered this route's transcript into the document, so the
 // first paint happened before any of this ran. Adopt it rather than repaint it.
 if (boot.sessionId !== null) {
-  view.open(boot.sessionId, { html: log.innerHTML, renderedThrough: boot.renderedThrough })
-  store.remember(boot.sessionId, log.innerHTML, boot.renderedThrough)
+  // The server rendered this route, notice and all. Adopt it, then store it
+  // without the notice so a cache never claims a session is empty after it has
+  // been given a message.
+  view.open(boot.sessionId, { html: log.innerHTML, renderedThrough: boot.renderedThrough }, boot.empty)
+  view.rememberCurrent()
 }
 ask.render(boot.sessionId, wire.asks(boot.asks))
 create.show(boot.showTools === true)
