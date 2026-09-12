@@ -137,10 +137,10 @@ async function expand (id, seq) {
 
 function retitle () {
   const id = view.current()
-  // The row's own capability list decides, and the route's server-rendered
-  // answer stands in until the first summary frame arrives. A cold session is
-  // resumed when its first prompt arrives, so it is as promptable as any other.
-  composer.hidden = !canPrompt(id)
+  // The box is offered for every session, never gated on a capability: a cold
+  // session is resumed when its first prompt arrives. It is hidden only where
+  // there is no session to address — the list and the single-event view.
+  composer.hidden = id === null
   if (id === null) return
   const row = chooser.find(id)
   heading.textContent = row === undefined ? 'Session' : row.title
@@ -157,13 +157,6 @@ function retitle () {
     where.textContent = row.workspace
     crumbs.append(where)
   }
-}
-
-function canPrompt (id) {
-  if (id === null) return false
-  const row = chooser.find(id)
-  if (row === undefined) return id === boot.sessionId && boot.canSend === true
-  return row.actions.includes('send')
 }
 
 composer.addEventListener('submit', async event => {

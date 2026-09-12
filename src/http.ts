@@ -202,7 +202,6 @@ async function resolve(ctx: Context, questions: Questions, url: URL, corpus: Cor
         { label: `Event ${seq}`, href: url.pathname },
       ],
       renderedThrough: -1,
-      canSend: false,
       asks: [],
       showTools: false,
     }
@@ -215,7 +214,6 @@ async function resolve(ctx: Context, questions: Questions, url: URL, corpus: Cor
       title: 'Sessions',
       crumbs: [{ label: 'Sessions', href: '/sessions' }],
       renderedThrough: -1,
-      canSend: false,
       asks: [],
       showTools: true,
     }
@@ -249,12 +247,6 @@ async function transcriptState(
       ...(row === undefined ? [] : [{ label: row.title, href: `/s${'/'}${encodeURIComponent(row.id)}` }]),
     ],
     renderedThrough,
-    // A cold session is resumed when its first prompt arrives, so the box is
-    // available for any session this route resolved. The row's capability list
-    // is authoritative once the listing carried it; a session the listing did
-    // not — archived, or between refreshes — still defaults to promptable,
-    // because reaching this line means the log above was readable.
-    canSend: (row?.actions ?? ['send']).includes('send'),
     asks,
     // Creating is a list-level action, so it lives on the list.
     showTools: false,
