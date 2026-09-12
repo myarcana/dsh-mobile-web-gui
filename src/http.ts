@@ -249,8 +249,12 @@ async function transcriptState(
       ...(row === undefined ? [] : [{ label: row.title, href: `/s${'/'}${encodeURIComponent(row.id)}` }]),
     ],
     renderedThrough,
-    // A session with no live agent still reads; it just cannot be prompted.
-    canSend: (row?.actions ?? []).includes('send'),
+    // A cold session is resumed when its first prompt arrives, so the box is
+    // available for any session this route resolved. The row's capability list
+    // is authoritative once the listing carried it; a session the listing did
+    // not — archived, or between refreshes — still defaults to promptable,
+    // because reaching this line means the log above was readable.
+    canSend: (row?.actions ?? ['send']).includes('send'),
     asks,
     // Creating is a list-level action, so it lives on the list.
     showTools: false,

@@ -137,9 +137,9 @@ async function expand (id, seq) {
 
 function retitle () {
   const id = view.current()
-  // A cold session has no live agent to receive a prompt, so it is read-only.
   // The row's own capability list decides, and the route's server-rendered
-  // answer stands in until the first summary frame arrives.
+  // answer stands in until the first summary frame arrives. A cold session is
+  // resumed when its first prompt arrives, so it is as promptable as any other.
   composer.hidden = !canPrompt(id)
   if (id === null) return
   const row = chooser.find(id)

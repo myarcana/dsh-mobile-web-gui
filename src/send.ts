@@ -17,16 +17,22 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { SessionId } from '@deepseek-ai/dsh-session'
+import { ensureLive } from './create.ts'
 import type { SendAccepted } from './types.ts'
 
 /**
  * Accept one prompt for a session, ignoring a resend of one already in the log.
+ *
+ * The session is brought live first when this process holds no agent for it —
+ * which is every session after a restart. The box is offered for cold sessions,
+ * so a prompt to one resumes it rather than failing: refusing here is what
+ * would make the always-present composer a lie.
  * @param ctx - the plugin context.
  * @param sessionId - the session the prompt is addressed to.
  * @param clientMessageId - the browser-minted key carried in `source`.
  * @param text - the prompt body.
  * @returns whether the log already held this key, making the resend a no-op.
- * @throws Error when no live agent owns that session.
+ * @throws Error when the session cannot be resumed.
  */
 export async function send(
   ctx: Context,
@@ -34,6 +40,7 @@ export async function send(
   clientMessageId: string,
   text: string,
 ): Promise<SendAccepted> {
+  await ensureLive(ctx, sessionId)
   const agent = ctx.agents.get(sessionId)
   if (agent === undefined) throw new Error(`session ${sessionId} has no live agent to receive a prompt`)
   if (await alreadyAccepted(ctx, sessionId, clientMessageId)) return { accepted: true, duplicate: true }

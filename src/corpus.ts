@@ -174,9 +174,11 @@ export class Corpus {
         workspaceOrder: group.order,
         lastLine: derived.lastLine,
         time: derived.time,
-        // Capability is decided here, from what this session can actually do:
-        // a cold session has no agent to receive a prompt, so it offers none.
-        actions: agent === undefined ? [] : agent.status === 'running' ? ['send', 'stop'] : ['send'],
+        // Every visible session accepts a prompt. A cold one — a log with no
+        // live agent, which is every session after a restart — is resumed when
+        // a prompt arrives rather than refused, so the capability belongs to
+        // the session instead of to whichever agents happen to be live.
+        actions: agent?.status === 'running' ? ['send', 'stop'] : ['send'],
         asks: questions.of(id),
       })
       this.want(record)

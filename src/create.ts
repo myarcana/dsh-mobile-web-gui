@@ -163,6 +163,67 @@ async function composeHere(ctx: Context, sessionId: SessionId, workspace: Worksp
 }
 
 /**
+ * Make a session's agent live, resuming it when this process holds none.
+ *
+ * Every session on disk is cold after a restart, because a live agent exists
+ * only in memory. The composer is offered for those sessions anyway, so the
+ * first prompt has to bring the agent back rather than fail: this is what makes
+ * "the box is always there" true rather than decorative.
+ *
+ * Resuming goes through the host's own `sessions.create` when one is mounted,
+ * because a create with a known id resolves to a resume — the same call the
+ * desktop UI makes, composing the preset the LOG recorded and validating the
+ * directory. The session's own cwd is passed so the host adopts the directory
+ * the session actually ran in; a resume naming any other is refused as a
+ * conflict, which is the behaviour worth keeping.
+ * @param ctx - the plugin context.
+ * @param sessionId - the session to bring live.
+ * @throws Error when the session cannot be resumed.
+ */
+export async function ensureLive(ctx: Context, sessionId: SessionId): Promise<void> {
+  if (ctx.agents.get(sessionId) !== undefined) return
+  const gateway = ctx.get('apiProxy') as Gateway | undefined
+  if (gateway !== undefined) {
+    const { session } = await ctx.sessionQuery.readSession(sessionId)
+    const cwd = (session as { readonly cwd?: unknown }).cwd
+    const payload = cwd === undefined ? { sessionId } : { sessionId, cwd }
+    unwrap(await gateway.sessions.create({ rpcId: randomUUID(), payload }))
+  } else {
+    await resumeHere(ctx, sessionId)
+  }
+  if (ctx.agents.get(sessionId) === undefined) {
+    throw new Error(`session ${sessionId} could not be resumed`)
+  }
+}
+
+/**
+ * Resume a cold session without the host API face, for a profile that mounts none.
+ *
+ * The preset is taken from the session's own header rather than from the
+ * roster's default: resuming under a different preset than the log was written
+ * with would compose the wrong tools for the history being continued.
+ * @param ctx - the plugin context.
+ * @param sessionId - the session to bring live.
+ */
+async function resumeHere(ctx: Context, sessionId: SessionId): Promise<void> {
+  const presets = ctx.get('agentPresets') as Presets | undefined
+  const defaults = ctx.get('agentDefaultModel') as DefaultModel | undefined
+  const { session } = await ctx.sessionQuery.readSession(sessionId)
+  const stored = (session as { readonly agentPreset?: unknown }).agentPreset
+  let setup: ((agentCtx: never) => Promise<void>) | undefined
+  if (presets !== undefined) {
+    const resolved = await presets.resolve(typeof stored === 'string' ? stored : undefined)
+    setup = async (agentCtx: never) => { await presets.mount(agentCtx, resolved.id) }
+  }
+  const selection = defaults?.currentSelection()
+  await ctx.agents.resume({
+    resumeSessionId: sessionId,
+    ...(selection === undefined ? {} : { agentOptions: { provider: selection.provider, model: selection.model } }),
+    ...(setup === undefined ? {} : { setup }),
+  } as never)
+}
+
+/**
  * Register a workspace over an existing directory.
  *
  * Idempotent: a directory already owned by a workspace resolves to that
