@@ -43,12 +43,24 @@ export interface Config {
    * `something.local:PORT` and any name pointed at the host all work.
    */
   host: string
+  /**
+   * Origin of the harness's own API, which this GUI reads questions from.
+   *
+   * `ask_user_question` is a single-provider service here and that provider
+   * belongs to the native UI, so questions are mirrored from its stream and
+   * answered through its `/api/respond` rather than intercepted. Loopback by
+   * default: this is a link between two servers in one process's box, never
+   * something a phone connects to.
+   */
+  hostOrigin: string
 }
 
 /** Configuration schema. */
 export const Config: Schema<Config> = Schema.object({
   port: Schema.natural().max(65_535).default(7777).description('TCP port the web GUI listens on.'),
   host: Schema.string().default('::').description('Interface to bind. Answers on every interface by default.'),
+  hostOrigin: Schema.string().default('http://127.0.0.1:3080')
+    .description('Origin of the harness API this GUI mirrors questions from and answers through.'),
 })
 
 /** The running web GUI server. */
@@ -93,7 +105,7 @@ export class WebGui extends Service {
   protected async [Service.init](): Promise<void> {
     const dir = fileURLToPath(new URL('../client', import.meta.url))
     const assets = await loadAssets(dir)
-    const hub = new StreamHub(this.ctx)
+    const hub = new StreamHub(this.ctx, this.config.hostOrigin)
     this.server = await listen(this.ctx, assets, hub, this.config.port, this.config.host)
     this.ctx.logger.info(
       `web-gui: listening on port ${this.config.port} — reachable by any hostname that resolves here`,

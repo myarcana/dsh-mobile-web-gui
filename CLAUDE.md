@@ -47,11 +47,11 @@ Requirements:
 - never use containers that scroll inside of themselves (except for modals, which must be pinned to the viewport not the document), always use document (page) scrolling
 - do not use badge-like UI elements. Make minimal use of small elements that look like badges or pills. They are normally ugly and just arise as a symptom of cognitive overload from a poor UI.
 - be very specific and unambiguous all the time in labels and titles. Instead of writing out something like "This class' schedule" use the specific class' name like "B1 Speaking and Listening's schedule"
-- use breadcrumbs to keep track of how far a user has navigated into a route and give them quick links back up the stack (the same page may have been arrived at by different routes, be smart about the breadcrumbs)
 - use the type system to make it impossible to add something somewhere that doesn't fall in line with requirements of the project
 - use the type system to make drift between dependencies and consumers impossible
 - use the type system to make it impossible to call a function/method/object/export in a way it doesn't support
 - never register a scroll handler unless explicitly instructed to do so. Scroll handlers lead to bad UX.
+- never truncate worktree names, always just wrap. No ellipsis, no `text-overflow`, no middle-elision, no clipping to a fixed width: the full name is always readable in full, wrapping onto as many lines as it needs.
 
 We want zero packages, zero plugins, we want #NoBuild, basic HTML, JavaScript, and CSS.
 

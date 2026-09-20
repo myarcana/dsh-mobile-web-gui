@@ -7,6 +7,9 @@
 // ends up behind the keyboard, and the browser then scrolls past the end of
 // the document trying to reveal the focused field.
 //
+// On a browser that does honour the key, both viewports shrink together and
+// the difference below is 0, so nothing is published and nothing is paid for.
+//
 // This listens to `resize` on the visual viewport, never to `scroll`. The
 // scroll-handler ban exists because scroll-driven layout janks — a handler
 // firing on every frame of a gesture. A resize handler fires when the keyboard
@@ -15,6 +18,9 @@
 // The height is written with `style.setProperty`, which is a CSSOM write and
 // so passes `style-src 'self'`; a `<style>` element or a `style` attribute
 // would be refused by the policy.
+
+// What --kb last had written to it, so an unchanged height costs nothing.
+let published = 0
 
 export function track (composer) {
   const vv = window.visualViewport
@@ -26,9 +32,16 @@ export function track (composer) {
     // the bottom for no reason. A keyboard only exists while a field has focus.
     const typing = composer.contains(document.activeElement)
     // innerHeight is the layout viewport, which the keyboard does not shrink
-    // on iOS; vv.height is what remains visible. Panning changes neither, so
-    // no scroll signal is needed.
+    // here; vv.height is what remains visible. Panning changes neither, so no
+    // scroll signal is needed.
     const covered = typing ? Math.max(0, Math.round(window.innerHeight - vv.height)) : 0
+    // Never write a value that is already there. A write to --kb invalidates
+    // layout for the whole document and changes the body's bottom padding, so
+    // it moves the reader's scroll position — and `resize` fires for things
+    // that leave the covered height untouched. Same reasoning as the guard in
+    // `view.toBottom`.
+    if (covered === published) return
+    published = covered
     document.documentElement.style.setProperty('--kb', covered + 'px')
   }
   vv.addEventListener('resize', publish)

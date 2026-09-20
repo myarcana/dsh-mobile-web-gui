@@ -17,8 +17,12 @@ import { mintId } from 'store'
 // different request — another workspace — get its own session.
 let pending = null
 
-function reservedId (workspaceId) {
-  const key = workspaceId ?? ''
+// The key is the whole request, not just the workspace: two worktrees in one
+// project are two different intents, and keying on the workspace alone would
+// make a session started in the second resolve to the one already made in the
+// first — landing the reader on a session opened with the wrong worktree.
+function reservedId (workspaceId, prefill) {
+  const key = (workspaceId ?? '') + '\n' + (prefill ?? '')
   if (pending === null || pending.key !== key) pending = { key, sessionId: 'session-' + mintId() }
   return pending.sessionId
 }
@@ -98,12 +102,33 @@ function failed (error) {
   note(error instanceof Error ? error.message : String(error), 'error')
 }
 
-async function post (url, body) {
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body)
-  })
+// A POST that never answers must not look like a POST that is working. Without a
+// deadline a stalled request and a slow one are the same screen, which is how a
+// wedged server leaves "Creating…" up for as long as the reader is willing to
+// wait. `timeoutMs` turns that into a reportable fault.
+async function post (url, body, timeoutMs) {
+  const controller = new AbortController()
+  const timer = timeoutMs === undefined ? undefined : setTimeout(() => controller.abort(), timeoutMs)
+  let response
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+      ...(timer === undefined ? {} : { signal: controller.signal })
+    })
+  } catch (error) {
+    // An abort is this deadline firing, not a network fault, and the reader
+    // needs to know the request may still have been carried out: the reserved id
+    // makes trying again resolve to the same session rather than a duplicate.
+    if (controller.signal.aborted) {
+      throw new Error('The server did not answer within ' + Math.round(timeoutMs / 1000) +
+        's. It may still be working; trying again will not create a second session.')
+    }
+    throw error
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
   const payload = await response.json().catch(() => null)
   if (!response.ok) {
     const message = payload !== null && typeof payload.message === 'string'
@@ -128,15 +153,96 @@ function pickWorkspace () {
   dialog.append(cancel())
 }
 
-async function create (workspaceId) {
-  const sessionId = reservedId(workspaceId)
-  clear()
-  note('Creating…', 'state')
+// How long a create may take before it is reported as stalled. The host composes
+// an agent on this call (preset resolution, model selection, sandbox), which is
+// normally about two seconds, so this is generous rather than tight.
+const CREATE_TIMEOUT_MS = 30000
+
+// Start a session in the workspace a worktree hangs under, with the opening
+// line that names the worktree already written.
+//
+// The harness creates a session against a workspace, not a checkout — a
+// workspace is one title over one path, and the worktree level this page shows
+// is derived from where sessions actually wrote. So the worktree is not passed
+// to the server: it is said to the agent, in the first thing the reader sends.
+//
+// The dialog is skipped deliberately. The tap already answered the only
+// question it asks — which workspace — so showing it would be this page asking
+// something it has just been told.
+export function inWorktree (workspaceId, opened) {
+  return create(workspaceId, opened)
+}
+
+// A create that says what it is doing where the reader tapped, rather than in
+// the shared dialog at the top of the page.
+//
+// The list repaints on every summary frame and rebuilds its buttons, so this
+// cannot write to a node: it reports through `onChange` and lets the caller keep
+// the state somewhere a repaint does not reach. Same reservation and same
+// deadline as the dialog path — only the reporting differs.
+//
+// `onChange` is called with `{ phase: 'creating', seconds }` while the request
+// is out, `{ phase: 'failed', message }` if it is refused or stalls, and `null`
+// when it succeeds.
+//
+// Success must report too, even though the reader is being taken to the session
+// they just made. Leaving is not the end of this button: history brings them
+// back to the list, and a starter still holding a spent `creating` state paints
+// disabled, with the second count frozen at whatever the create finished on, and
+// refuses every tap. Clearing it is what makes the button a button again.
+export async function startInline (workspaceId, opened, onChange) {
+  const sessionId = reservedId(workspaceId, opened?.prefill)
+  const started = Date.now()
+  const elapsed = () => Math.round((Date.now() - started) / 1000)
+  // True only while this request is actually out. Every `creating` state carries
+  // it, so a caller holding one across a navigation can ask whether the create
+  // behind it is still running instead of trusting that it was told when it
+  // stopped. Settled in `finally`, so no exit path can leave it lying.
+  let running = true
+  const live = () => running
+  onChange({ phase: 'creating', seconds: 0, live })
+  // Elapsed seconds, so a slow create reads as slow rather than as a tap that
+  // was dropped. The caller stops repainting when a terminal phase arrives.
+  const ticker = setInterval(() => onChange({ phase: 'creating', seconds: elapsed(), live }), 1000)
   try {
     const created = await post('/api/sessions', {
       ...(workspaceId === undefined ? {} : { workspaceId }),
       sessionId
-    })
+    }, CREATE_TIMEOUT_MS)
+    pending = null
+    // Before the hand-off, because that navigates: this tap is answered, and the
+    // starter must be idle again for when history returns the reader to the list.
+    onChange(null)
+    onCreated(created.sessionId, opened)
+  } catch (error) {
+    // Verbatim: the host's own sentence is the one that says why it was refused,
+    // and the reservation survives, so trying again asks for the very session
+    // this attempt may already have made.
+    onChange({ phase: 'failed', message: error instanceof Error ? error.message : String(error) })
+  } finally {
+    clearInterval(ticker)
+  }
+}
+
+// `opened` is what the reader's tap chose: the opening line to put in the box,
+// and the checkout it names. Both ride together because both are answers to the
+// same tap, and the page needs the name before the session has written anything
+// the server could derive it from. Undefined for a plain "New session".
+async function create (workspaceId, opened) {
+  const sessionId = reservedId(workspaceId, opened?.prefill)
+  clear()
+  const state = note('Creating…', 'state')
+  const started = Date.now()
+  // Elapsed seconds, so a slow create reads as slow rather than as a page that
+  // dropped the tap. Cleared on every exit path below.
+  const ticker = setInterval(() => {
+    state.textContent = 'Creating… ' + Math.round((Date.now() - started) / 1000) + 's'
+  }, 1000)
+  try {
+    const created = await post('/api/sessions', {
+      ...(workspaceId === undefined ? {} : { workspaceId }),
+      sessionId
+    }, CREATE_TIMEOUT_MS)
     // The reservation is spent, so the next create is a new intent rather than
     // a retry of this one.
     pending = null
@@ -144,17 +250,20 @@ async function create (workspaceId) {
     // so without this the success path is the one that forgets to clean up and
     // leaves "Creating…" on screen for good.
     clear()
-    onCreated(created.sessionId)
+    onCreated(created.sessionId, opened)
   } catch (error) {
     clear()
     title('New session')
     failed(error)
     // The reservation survives the failure, so trying again asks for the very
     // session this attempt may already have made.
-    if (pending !== null && pending.key === (workspaceId ?? '')) {
-      dialog.append(button('Try again', () => create(workspaceId), true))
+    if (pending !== null && pending.key === (workspaceId ?? '') + '\n' + (opened?.prefill ?? '')) {
+      dialog.append(button('Try again', () => create(workspaceId, opened), true))
     }
     dialog.append(cancel())
+  } finally {
+    running = false
+    clearInterval(ticker)
   }
 }
 

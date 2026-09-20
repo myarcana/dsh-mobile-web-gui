@@ -7,6 +7,17 @@
 //
 // Retries are blind and unconditional, because durable dedup on the server
 // makes a duplicate POST harmless.
+//
+// This module does not decide what a prompt's delivery state *says*. It used to:
+// a row carried its own 'Queued'/'Sending' word, which the page rendered as
+// fact. That made the client a second author of delivery state, disagreeing
+// with the server and with no way to be corrected — the row was dequeued on
+// acceptance, so the last word it ever published ('Sending') could never be
+// revisited, and a single missed reconciliation left it on screen forever.
+// Now the server names the prompts it is holding on every summary frame and the
+// page renders that. The states below drive the *answer* and *approval* paths,
+// which settle on their POST response because accepting them is what hands them
+// to the waiting tool call.
 
 import * as store from 'store'
 import * as wire from 'wire'
@@ -20,7 +31,8 @@ export function observe (fn) {
 }
 
 // Write to storage before anything touches the network, then render Queued.
-// `fields` is { text } for a prompt or { askId, answers } for an answer.
+// `fields` is { text } for a prompt, { askId, answers } for an answer, or
+// { kind: 'approval', askId, outcome } for a permission decision.
 export async function queue (sessionId, fields) {
   const row = {
     clientMessageId: store.mintId(),
@@ -43,7 +55,16 @@ export async function drain () {
       if (!navigator.onLine) break
       row.state = 'Sending'
       onChange(row)
-      const url = row.askId === undefined ? '/api/send' : '/api/answer'
+      // Three kinds of row share one outbox, and two of them carry an `askId`
+      // (an answer names the question, a decision names the permission), so
+      // `askId` alone cannot say which route to post to. The kind is named
+      // explicitly instead, and a row that predates this field — an answer or a
+      // prompt queued before this shipped, still in storage — falls back to the
+      // old `askId === undefined` test. So the routes are decided by what the
+      // row *is*, never by which fields happen to be present.
+      const url = row.kind === 'approval'
+        ? '/api/decide'
+        : row.askId === undefined ? '/api/send' : '/api/answer'
       let response
       try {
         response = await fetch(url, {
@@ -75,10 +96,10 @@ export async function drain () {
       }
       // A prompt is accepted, not delivered: the row leaves storage because the
       // server now owns it durably, and the indicator stays Sending until the
-      // stream shows it. An accepted answer is delivered, because accepting it
-      // is what hands it to the waiting tool call.
+      // stream shows it. An accepted answer or decision is delivered, because
+      // accepting it is what hands it to the waiting tool call.
       await store.dequeue(row.clientMessageId)
-      row.state = row.askId === undefined ? 'Sending' : 'Answered'
+      row.state = row.kind === 'approval' ? 'Decided' : row.askId === undefined ? 'Sending' : 'Answered'
       onChange(row)
     }
   } finally {

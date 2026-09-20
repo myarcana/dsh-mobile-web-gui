@@ -68,9 +68,20 @@ export function cached (sessionId) {
 
 // A cached render claiming to be ahead of the log cannot be true. It means the
 // session was reset behind us, so the cache is dropped rather than trusted.
+//
+// "Ahead" is judged against the summary's own baseline, never against a number
+// it cannot have caught up with yet. `latestSeq` is folded on a delay and is
+// -1 before a session has ever been folded, so a cache rendered from the live
+// stream is legitimately ahead of it for as long as the session is being
+// written. Only a summary that has itself been derived can accuse a cache of
+// being ahead, and only a log that actually went *backwards* is evidence of a
+// reset: a cache one frame in front is the normal race, not a rewritten log.
 export function invalidateIfAhead (sessionId, latestSeq) {
   const row = transcripts.get(sessionId)
-  if (row === undefined || row.renderedThrough <= latestSeq) return false
+  if (row === undefined) return false
+  // Never folded: the summary knows nothing, so it can prove nothing.
+  if (!Number.isSafeInteger(latestSeq) || latestSeq < 0) return false
+  if (row.renderedThrough <= latestSeq) return false
   transcripts.delete(sessionId)
   tx('transcripts', 'readwrite', store => store.delete(sessionId))
   return true

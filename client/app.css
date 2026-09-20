@@ -2,11 +2,33 @@
 
 :root {
   --gap: 12px;
+  /* One level of the session tree. Wide enough that a glance separates the
+     levels — the old 12px indent read as one flat list — and that the branch
+     arm below is a visible horizontal run rather than a tick, while still
+     leaving a long title most of a phone's width. */
+  --step: 28px;
+  /* Where a level's trunk sits inside its own step, and how thick it is. The
+     hairline is a real device pixel on a phone rather than a CSS px, which
+     renders as a grey smear at 3x. */
+  --trunk: 8px;
+  --hair: 1px;
+  /* How far the branch arm stops short of its label. Small on purpose: the arm
+     has to arrive *at* the text for the tree to point at its leaves, and a wide
+     gap leaves the two reading as unrelated marks. */
+  --reach: 4px;
+  /* The width Archive takes out of a row, plus its separation from the title.
+     Named because two rules depend on the same number — the button is lifted out
+     of the flow, so the text has to be told how far to start clear of it. */
+  --archive-width: 90px;
   --ink: #111;
   --dim: #555;
   --line: #d8d8d8;
   --paper: #fff;
   --sunk: #f4f4f4;
+  /* Stopped on the reader. The one warm colour on the page, shared by the dot
+     beside an asking row and the waiting count in the heading above it, so the
+     two can never say the same thing in different colours. */
+  --warn: #b26a00;
   color-scheme: light dark;
 }
 
@@ -17,6 +39,9 @@
     --line: #333;
     --paper: #121212;
     --sunk: #1d1d1d;
+    /* Brighter against a dark page: the light-mode amber reads as brown here.
+       Overriding the variable moves the dot and the waiting count together. */
+    --warn: #ffb300;
   }
 }
 
@@ -44,24 +69,130 @@ body {
   overflow-wrap: anywhere;
 }
 
+/* Two columns and two rows: the Sessions link runs down the left across both,
+   and the right-hand column stacks the worktree over the session title. A grid
+   rather than a flex row because flex cannot stack two children while keeping a
+   third beside them — the alternative is a wrapper div, which is the nesting
+   this page is built to avoid. */
 header {
   position: sticky;
   top: 0;
-  display: flex;
-  gap: var(--gap);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: var(--gap);
   align-items: center;
-  padding: env(safe-area-inset-top, 0px) 0 8px;
+  /* Nothing on the bottom edge. The title below carries the only space the
+     header needs, and a second padding here stacked on top of it was most of
+     the empty band that used to sit between the session name and the first
+     message. */
+  padding: env(safe-area-inset-top, 0px) 0 0;
   background: var(--paper);
   border-bottom: 1px solid var(--line);
 }
 
-h1 {
+/* The list is the one route with no header: its only link points at the page
+   already open, and its title repeats the heading the list renders itself.
+   display:grid would otherwise beat the browser's own [hidden] rule. */
+header[hidden] { display: none; }
+
+/* Down the left of both rows, centred against the pair. */
+#pick {
+  grid-row: 1 / -1;
+  align-self: center;
+}
+
+/* The checkout this session works in, above its name. It answers the coarser
+   question — which of a dozen checkouts is this — so it is read first, and the
+   title below it names the one session within that place. */
+/* Plain text flow, not a flex row: the copy icon follows the last word of the
+   name the way a footnote mark follows a word, so a name that wraps over
+   several lines keeps its icon beside its end rather than parked in a column
+   of its own down the side. */
+#where {
+  grid-column: 2;
   margin: 0;
-  font-size: 17px;
+  color: var(--dim);
+  font-size: 12px;
+  /* The two header lines are one block, so nothing separates them: the leading
+     is cut to the height of the copy mark that sits inline at the end of the
+     name (1.4em), which is the shortest this line goes without clipping that
+     mark. Any smaller and the half-leading above and below turns negative and
+     the icon is cropped. The remaining distance to the title is the title's
+     own padding, which is 0 on its top edge. */
+  line-height: 1.4;
+  min-width: 0;
+}
+
+/* display:flex would otherwise beat the browser's own [hidden] rule, and this
+   line is hidden on the list and until the first list frame lands. */
+#where[hidden] { display: none; }
+
+/* The checkout name wraps onto as many lines as it needs. It is never
+   truncated: a name is what the reader pastes into a shell or types into a
+   prompt, and half of one is worse than a taller header. */
+#where span {
+  overflow-wrap: anywhere;
+}
+
+/* A hair of space between the name and the mark that copies it, so the two are
+   not touching but still read as one unit. */
+#where .copy { margin-left: 4px; }
+
+h1 {
+  grid-column: 2;
+  margin: 0;
+  /* Down from 17px. The title no longer carries the header alone: the worktree
+     above it says where, and the two are read as one block. */
+  font-size: 11px;
   font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  /* The min-width lets the control inside wrap its text rather than forcing
+     the grid column wide enough to hold the longest unbroken word. Nothing here
+     truncates: the title wraps to as many lines as the name needs. */
+  min-width: 0;
+}
+
+/* The title is the control that opens this session's menu. It keeps the
+   heading's own look rather than growing chrome: a bordered box here would make
+   the header read as a toolbar, and the title is the thing being named, not a
+   button that happens to sit in the header.
+
+   Vertical padding rather than a min-height, because this sits under the
+   worktree line inside a sticky header: a 44px box would push every transcript
+   down the page. The padded row plus the header's own height is the tap area.
+
+   The padding is real space rather than an invisible overhanging inset. Both
+   directions were tried and neither is available here: a box hanging below the
+   header would paint over the top of the transcript (the header is sticky with
+   no stacking context of its own) and swallow taps meant for the log, and one
+   reaching up would cover the mark that copies the checkout name and take its
+   taps instead. So the target is honest padding, trimmed to 8px from the 14px
+   it was — which, with the header no longer adding a second 8px band below it,
+   takes the whole header from about 56px to about 42px. The title's own row is
+   about 24px of that; the rest of the 44px a thumb wants is the worktree line
+   above it, which is text with only the small copy mark on it, so a press
+   aimed at the title and landing slightly high still opens the menu.
+
+   All of it is below. The checkout line above names the place this session is
+   in and the title names the session within it: they are one block, read as a
+   unit, so there is nothing between them to space apart. */
+#title {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0 0 8px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  /* Wraps onto as many lines as it needs, never truncated. A name cut short is
+     a name the reader cannot read, and the header exists to say which session
+     and which checkout this is — the two facts a truncation is most likely to
+     eat, because the part that differs between two similar names is usually the
+     end. The header grows instead; it is sticky, so it costs a little of the
+     transcript's first screen and nothing else. */
+  overflow-wrap: anywhere;
+  touch-action: manipulation;
 }
 
 /* The create controls, on the list only. display:flex would beat the
@@ -74,7 +205,131 @@ h1 {
 #dialog form input { flex: 1; min-width: 0; }
 #dialog button.primary { border-color: var(--ink); font-weight: 600; }
 
-#pick, #send, #ask button, #tools button, #dialog button {
+/* What this device will be told about, at the top of the session list.
+   A quiet line rather than a switch: it states what is true now and leads to
+   the screen that changes it, which is where the permission prompt belongs. */
+.alerts {
+  display: block;
+  /* The 44pt minimum, met by padding rather than a height, so the line still
+     wraps to as many lines as a long sentence needs. */
+  padding: 13px 0;
+  color: var(--dim);
+  font-size: 13px;
+  text-decoration: none;
+}
+
+/* The notifications screen. Pinned to the viewport like the session menu, not
+   to the document, and centred because it hangs off nothing in particular. */
+#alerts {
+  position: fixed;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2;
+  width: calc(100vw - var(--gap) * 2);
+  max-width: 420px;
+  margin-top: calc(env(safe-area-inset-top, 0px) + 44px);
+}
+
+#alerts[hidden] { display: none; }
+
+#alerts .sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: var(--gap);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--paper);
+}
+
+#alerts h2 { margin: 0; font-size: 13px; font-weight: 600; }
+#alerts p { margin: 0; }
+
+/* The session menu, opened by tapping the title.
+
+   Pinned to the viewport rather than to the document, which is the one case
+   this page allows: it is a modal, and a menu that scrolls away from the title
+   that opened it is a menu the reader has to chase. It hangs under the header
+   rather than covering the screen — it holds two or three controls, and a
+   full-screen sheet for that much is theatre. */
+#menu {
+  position: fixed;
+  top: 0;
+  /* Left-aligned with the title it drops from, not with the viewport. `--anchor`
+     is the title's own left edge, measured when the menu opens: the title starts
+     wherever the Sessions link beside it ends, so this is not a length the
+     stylesheet can know on its own. The fallback is the page gutter, which is
+     where the title sits once that link is out of the way. */
+  left: var(--anchor, var(--gap));
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  /* Clear of the header it drops from, including the notch. The header is the
+     worktree line over the title, which is about 40px of text; 44 clears it
+     without leaving the menu floating away from the edge it hangs off. */
+  margin-top: calc(env(safe-area-inset-top, 0px) + 44px);
+  padding: var(--gap);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--paper);
+  /* Wide enough for "Archive this session" on one line, never wider than what
+     is left of the viewport once the sheet has been pushed right to meet the
+     title — otherwise a long title's menu would run off the right edge, which is
+     the thing this anchoring is here to stop. */
+  min-width: 232px;
+  max-width: calc(100vw - var(--anchor, var(--gap)) - var(--gap));
+}
+
+/* display:flex would otherwise beat the browser's own [hidden] rule. */
+#menu[hidden] { display: none; }
+
+/* The session being acted on, named in full. It wraps rather than truncating:
+   this is the one place where the whole title is worth the height. */
+#menu h2 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+/* Archiving is the one control here that changes anything, so it is the one
+   that carries colour. Amber rather than red: archiving hides a session, it does
+   not delete it, and red would overstate what the tap does. */
+#menu button.danger { border-color: var(--warn); color: var(--warn); }
+
+/* Stopping is not destructive — the session survives, only the current turn
+   ends — so it takes no colour from the row above it. Dimmed while the request
+   is in flight, which is the only state it has of its own. */
+#menu button.quiet:disabled { opacity: 0.6; }
+
+/* Copying is a full row here rather than the small chip it is beside a worktree
+   name, because in a menu it is one of the options rather than an accessory. The
+   chip's invisible 44px inset is dropped with it: the row is already that tall,
+   and an inset stretched over it would reach past the button it belongs to.
+
+   The row is worded, so it is laid out as a label with a mark in front of it.
+   The chip's square em-box is undone here — it is a full row like the ones above
+   it — and the glyph keeps that square for itself instead, so the icon stays the
+   size of the text rather than stretching across the row. */
+#menu .copy {
+  justify-content: flex-start;
+  gap: 8px;
+  width: auto;
+  height: auto;
+  /* The chip carries no padding, which here would set its label a step further
+     left than the words on the rows above and below it. Restated so all three
+     rows start their text on the same line. */
+  padding: 0 14px;
+  font-size: inherit;
+  line-height: inherit;
+  vertical-align: baseline;
+}
+#menu .copy svg { flex: none; width: 1.4em; height: 1.4em; }
+#menu .copy::after { content: none; }
+
+#pick, #send, #ask button, #approval button, #tools button, #dialog button, #menu button, #alerts button {
   display: flex;
   align-items: center;
   /* 44px minimum tap area, non-negotiable. */
@@ -90,10 +345,6 @@ h1 {
   touch-action: manipulation;
 }
 
-#crumbs { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 0; color: var(--dim); font-size: 13px; }
-#crumbs a { color: var(--dim); min-height: 44px; display: flex; align-items: center; }
-#crumbs span { display: flex; align-items: center; min-height: 44px; }
-
 article {
   padding: var(--gap) 0;
   border-bottom: 1px solid var(--line);
@@ -104,18 +355,149 @@ article {
    70px tool row to a 400px code block, so every article was locked to the
    225px placeholder — dead space under short ones, and the scrollbar lurching
    as each article swapped its estimate for its real height on scroll. A
-   placeholder only steadies geometry when it is close to true. The transcript
-   is bounded at TAIL_LIMIT anyway, so plain layout is both correct and
-   cheaper than a wrong estimate. */
+   placeholder only steadies geometry when it is close to true. Each read is
+   bounded at TAIL_LIMIT, so plain layout is both correct and cheaper than a
+   wrong estimate. A reader walking back through history can grow the log past
+   one chunk; if that ever measures badly, the answer is a real per-row estimate
+   rather than the single wrong one removed here. */
+
+/* The way back into everything above the first painted chunk. It is the only
+   control in the log, so it carries a full tap target. A button rather than a
+   link because it loads into this screen instead of going to another one. */
+#earlier {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: none;
+  color: var(--dim);
+  font: inherit;
+  touch-action: manipulation;
+}
 
 article[data-role="user"] { background: var(--sunk); padding-inline: var(--gap); margin-inline: calc(var(--gap) * -1); }
+article[data-role="subagent"] { border-left: 3px solid var(--line); padding-left: var(--gap); margin-left: 0; }
 article[data-role="tool"], article[data-role="progress"] { font-size: 14px; color: var(--dim); }
+
+/* A question the agent put to the reader — the same block whether it is still
+   waiting or was answered long ago. It is conversation, not tool traffic: it
+   stays at full size, is never folded into a tool count, and so remains readable
+   in the scrollback forever. The amber rule marks it as the one place the reader
+   was asked to act, and it is on both for that reason: answering a question does
+   not change what it was, so a question must not change appearance at the moment
+   it is answered.
+
+   One rule covers the waiting form and the kept row together, so the two cannot
+   drift into looking like different kinds of thing.
+
+   No background tint: the block is a form, and a fill behind a form-shaped block
+   reads as a second, different kind of thing rather than as the question that
+   was actually asked. */
+#ask form, article[data-role="asked"] { border-left: 3px solid var(--warn); padding-left: var(--gap); }
+
+/* The kept question draws the same controls the live form draws, so it shares
+   the form's label layout rather than restating it — one rule, so the record and
+   the form cannot drift into looking like different things.
+
+   The bullet sits on the label's first line, not centred against a label that
+   wrapped to several lines. The line height is stated so the bullet can be
+   centred in a box exactly one line tall, rather than nudged down by a margin
+   guessed against each browser's own control metrics. */
+#ask label, article[data-role="asked"] label {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  min-height: 44px;
+  line-height: 24px;
+}
+
+#ask label .pick, article[data-role="asked"] .pick {
+  height: 24px;
+  margin: 0;
+}
+
+/* A record of what someone chose has to show what they chose.
+
+   The controls stay `disabled` — a settled question must not be focusable,
+   tabbable or submittable — but a disabled control is painted a washed-out grey
+   by the browser, and a selected radio then looks almost exactly like an empty
+   one, so the question reads as though it was never answered. `accent-color`
+   cannot fix that: browsers ignore it precisely when the control is disabled.
+
+   So the mark is drawn here instead. The native painting is switched off and the
+   box, the dot and the tick are drawn in the text colour, which keeps a settled
+   answer as legible as the words around it. */
+article[data-role="asked"] .pick {
+  appearance: none;
+  -webkit-appearance: none;
+  opacity: 1;
+  width: 18px;
+  height: 18px;
+  /* The 24px line box the label sets, so the control still sits on the first
+     line of a label that wrapped. */
+  margin: 3px 0;
+  border: 2px solid var(--ink);
+  background: none;
+  /* Square for a checkbox, round for a radio, exactly as the native pair reads. */
+  border-radius: 4px;
+  display: grid;
+  place-content: center;
+  flex: none;
+}
+
+article[data-role="asked"] .pick[type="radio"] { border-radius: 50%; }
+
+/* The mark itself, drawn only when the control records a choice. `currentColor`
+   so it follows the text into dark mode without a second rule. */
+article[data-role="asked"] .pick:checked::before {
+  content: "";
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: currentColor;
+}
+
+article[data-role="asked"] .pick[type="radio"]:checked::before { border-radius: 50%; }
+
+/* The free-text box is greyed by the same rule, and what the reader typed is the
+   answer, so it is restored to full strength too. */
+article[data-role="asked"] .other {
+  opacity: 1;
+  color: var(--ink);
+  -webkit-text-fill-color: var(--ink);
+}
+
+/* The line standing in for a folded run of tool calls. It is the only way to
+   reach those rows, so it carries a full tap target rather than the bare text
+   height an ordinary tool row gets. */
+article[data-tools] { padding: 0; }
+article[data-tools] a { display: flex; align-items: center; min-height: 44px; }
 article[data-partial]::after { content: "▍"; color: var(--dim); }
 
 article > :first-child { margin-top: 0; }
 article > :last-child { margin-bottom: 0; }
 
 p { margin: 0 0 8px; }
+
+/* Newlines inside a message are content, not whitespace. The serializer emits a
+   paragraph's source lines verbatim, and HTML would otherwise collapse every one
+   of them to a single space — turning a three-line address block, a stack trace,
+   or a numbered plan into one run-on line. `pre-wrap` keeps the line breaks the
+   author typed while still wrapping long lines to the viewport, which is what a
+   phone needs. Scoped to the transcript: a heading or a status line has no
+   authored newlines to keep, and `.detail` already sets this for itself.
+   A partial (streaming) article holds raw text in the same shape, so it is
+   covered here too rather than drifting from the committed render. */
+article p, article[data-partial] { white-space: pre-wrap; }
+
+/* An exception to the rule above: a list item's marker and text must stay on one
+   line. Bullets are built from single lines, so there is nothing to preserve. */
+article li { white-space: normal; }
+
 .state { color: var(--dim); font-size: 13px; }
 time { display: block; color: var(--dim); font-size: 12px; margin-top: 6px; }
 
@@ -133,12 +515,62 @@ blockquote { margin: 8px 0; padding-left: 10px; border-left: 3px solid var(--lin
 ul, ol { margin: 8px 0; padding-left: 22px; }
 a { color: inherit; }
 
+/* GFM headings. A transcript heading is a label inside a message, not page
+   chrome, so the scale stays close to body text: h1 must not shout over the
+   conversation around it. */
+article h1, article h2, article h3, article h4, article h5, article h6 {
+  margin: 12px 0 6px;
+  line-height: 1.3;
+  font-size: 16px;
+}
+
+article h1 { font-size: 19px; }
+article h2 { font-size: 17px; }
+article h4, article h5, article h6 { color: var(--dim); }
+
+del { color: var(--dim); }
+hr { margin: 12px 0; border: 0; border-top: 1px solid var(--line); }
+
+/* A table is the second sanctioned inner scroller, for the same reason `pre` is
+   the first: a wide table must scroll within its own band rather than widen the
+   document and put every message on a horizontal scrollbar. */
+.tablewrap { margin: 8px 0; overflow-x: auto; }
+
+table { border-collapse: collapse; width: 100%; }
+
+th, td {
+  /* Cells hold single-line inline content, so the transcript's `pre-wrap` would
+     only preserve the source's padding spaces. `normal` collapses them, exactly
+     as `article li` already does for the same reason. */
+  white-space: normal;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+th { background: var(--sunk); font-weight: 600; }
+
+/* Alignment the delimiter row asked for. The class names come from a closed
+   union in `node.ts`, so these three rules are the whole set. */
+.aleft { text-align: left; }
+.acenter { text-align: center; }
+.aright { text-align: right; }
+
+/* A task-list marker records what the author wrote; it is disabled, so it reads
+   as state rather than as a control the reader can operate. */
+article li .pick { margin: 0 6px 0 0; vertical-align: baseline; }
+
 .row {
+  position: relative;
   display: block;
+  /* The padding is inside the link, so the whole band — text, the space above
+     and below it, and the tree gutter on the left — opens the session. */
   padding: var(--gap) 0;
-  border-bottom: 1px solid var(--line);
   text-decoration: none;
   min-height: 44px;
+  /* Kills the double-tap-zoom delay without taking the scroll gesture. */
+  touch-action: manipulation;
 }
 
 /* A workspace heading. Sticky so the reader always knows which group the
@@ -148,23 +580,686 @@ a { color: inherit; }
   top: 0;
   z-index: 1;
   margin: 0;
-  padding: 6px 0;
   background: var(--paper);
   border-bottom: 1px solid var(--line);
-  color: var(--dim);
-  font-size: 13px;
+  color: var(--ink);
+  font-size: 15px;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .group:not(:first-child) { margin-top: var(--gap); }
 
+/* A worktree heading passes *under* the workspace heading holding the top of
+   the screen, rather than being slid over by it.
+
+   The workspace heading is sticky and opaque, so as the page scrolls it covers
+   whatever is level with it. A worktree heading is wider than its own name —
+   the copy mark and the count sit out to the right of it — so the part that got
+   covered was the name, while the mark and the tally stayed in view. The result
+   read as a copy mark floating beside nothing, which is exactly what it was:
+   the name was still there, underneath the heading above it.
+
+   Giving the row its own stacking context below the workspace's `z-index: 1`
+   keeps the covering deliberate and complete: the whole row disappears together
+   as it passes behind, instead of losing only its left half. */
+.tree { position: relative; z-index: 0; }
+
+/* A worktree heading: the middle level, between a workspace and its sessions.
+   Not sticky — only one heading may hold the top of the screen, and that is the
+   workspace, which is the level a reader scrolling a long list needs kept. */
+.tree {
+  position: relative;
+  /* The space above a worktree is padding, not margin, so it sits *inside* the
+     box the elbow is drawn in. As margin it fell outside every element, leaving
+     a gap in the workspace trunk at each worktree boundary — the line has to
+     run unbroken from the workspace heading to the last session under it. */
+  margin: 0;
+  /* No padding here: the indent belongs to the button inside, or the gutter it
+     reserves would sit outside the control and become an unpressable strip
+     down the left of every heading. The elbow is positioned against this
+     element, so it stays where it is either way. */
+  padding: 0;
+  color: var(--dim);
+  font-size: 13px;
+  font-weight: 600;
+  /* The stub of this worktree's own trunk, running from the heading's midline to
+     its bottom edge so the first session below has something to hang off.
+
+     Both pseudo-elements are already spent — one on the elbow into the workspace,
+     one continuing that workspace trunk past this heading — and this is a third
+     line in a third column, so it is painted as a background like the rows'.
+     Without it a session's arm began at the row's top edge with nothing above it,
+     which is what made every row's connector read as a floating vertical line. */
+  background-image: linear-gradient(var(--line), var(--line));
+  background-repeat: no-repeat;
+  /* The worktree column: one step in from the workspace trunk, which is where a
+     session's own arm is drawn. */
+  background-position: calc(var(--step) + var(--trunk)) calc(var(--gap) + 0.75em);
+  background-size: var(--hair) 100%;
+}
+
+/* Only a worktree with sessions showing gets that stub. A shut one has nothing
+   on screen to join, and an open but empty one is answered by its own "No
+   sessions yet." — neither has a leaf below for the line to reach, and a line
+   reaching nothing is the floating stub this stanza exists to remove. */
+.tree:has(.disclose[aria-expanded="false"]),
+.tree:not(:has(+ .rowline, + .row, + .starter)) { background-image: none; }
+
+/* The elbow that joins a worktree to its workspace: a stub of the trunk down to
+   this heading's midline, then a turn to the right into the title. Drawn in the
+   gutter the padding above reserves, so it never moves the text. */
+.tree::before {
+  content: "";
+  position: absolute;
+  left: var(--trunk);
+  /* From the very top of the box — which now includes the padding above — down
+     to the middle of the title text, so the incoming trunk is continuous and
+     the turn meets the words rather than floating above them. */
+  top: 0;
+  /* The arm runs all the way to the label, stopping only --reach short of it.
+     This is the stroke that makes the shape a tree: a branch leaving the trunk
+     and travelling out to the thing it names. A short stub reads as a tick and
+     leaves every level looking like an unconnected vertical rule. */
+  width: calc(var(--step) - var(--trunk) - var(--reach));
+  height: calc(var(--gap) + 0.75em);
+  border-left: var(--hair) solid var(--line);
+  border-bottom: var(--hair) solid var(--line);
+  /* A tight radius keeps the corner legible as a turn while leaving most of the
+     arm straight; a large one eats the horizontal run into a vague curve. */
+  border-bottom-left-radius: 4px;
+}
+
+/* The trunk continuing past this worktree to its siblings below. Absent on the
+   last one, which is what makes the final elbow read as the end of the branch
+   rather than a line running into nothing. */
+.tree::after {
+  content: "";
+  position: absolute;
+  left: var(--trunk);
+  /* Resumes where the elbow turned away and runs to the bottom of the box. The
+     rows below carry the trunk onward as a background gradient, so the line
+     continues without this one overshooting — and an overshoot would show,
+     because a row has no background of its own to paint over it. */
+  top: calc(var(--gap) + 0.75em);
+  bottom: 0;
+  border-left: var(--hair) solid var(--line);
+}
+
+.tree[data-last]::after { display: none; }
+
+/* The heading's control. Fills its heading so the whole bar is the tap target,
+   and inherits the type so the button is invisible as a button — the caret and
+   the count are what say it opens. */
+.disclose {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  /* Kills the double-tap-zoom delay without taking the scroll gesture. */
+  touch-action: manipulation;
+}
+
+/* The worktree heading's indent and the space above it, carried by the control
+   rather than by the heading, so both are part of the tap target. A press
+   anywhere in the band — including the tree gutter beside the title — opens
+   the worktree, instead of a 22px strip down the left doing nothing. */
+.tree .disclose {
+  /* The indent is padding plus a hanging indent: the padding sets where the
+     block starts, and the negative text-indent pulls only the FIRST line back
+     out to make room for the caret drawn in ::before. Every later line of a
+     wrapped name therefore keeps the full indent instead of falling back to the
+     block's edge, which is what made a second line sit further left than the
+     first and break out of the worktree's column. */
+  padding: var(--gap) 0 0 calc(var(--step) + 1em + 8px);
+  text-indent: calc((1em + 8px) * -1);
+  /* The padding above is inside the button now, so the floor has to clear it
+     or a short heading's target shrinks back below the minimum. */
+  min-height: calc(44px + var(--gap));
+  /* Text, not a flex row. The copy mark lives inside this element now, and it
+     has to flow after the last word of the name the way a footnote mark does —
+     which only happens if the contents are laid out as text. As flex children
+     the name and the mark were each a block, and the mark aligned against the
+     name's full-width box rather than against the line its words ended on. */
+  display: block;
+}
+
+/* The caret is drawn by ::before, which is now in the text flow rather than a
+   flex child; this restores the gap the flex `gap` was providing. */
+.tree .disclose::before { margin-right: 8px; }
+
+/* The name is inline text, so its last line ends where its last word does and
+   the mark that copies it follows immediately. */
+.tree .disclose span { display: inline; }
+
+/* The mark never breaks away from the name onto a line of its own.
+   `overflow-wrap: anywhere` lets a long name break mid-word, and the break
+   opportunity it creates sits *between* the final fragment and the mark — so a
+   name that filled the row left its icon stranded at the start of the next
+   line, which is the one place it must never be. A zero-width box that cannot
+   be split holds the two together: if the mark does not fit, the fragment it is
+   bound to moves down with it. */
+.tree .disclose .copy { margin-left: 4px; }
+
+/* The caret, which is the whole of the open/shut affordance. Drawn from the
+   state the button already publishes, so the two cannot disagree. */
+.disclose::before {
+  content: "›";
+  flex: none;
+  width: 1em;
+  color: var(--dim);
+  font-size: 15px;
+  transition: transform 120ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .disclose::before { transition: none; }
+}
+
+.disclose[aria-expanded="true"]::before { transform: rotate(90deg); }
+
+/* The title, which is the part allowed to run out of room. It wraps rather
+   than truncating: a folder name is how the reader tells one workspace from
+   another, and the part an ellipsis eats is the deep end of the path, which is
+   exactly the part that differs between two sibling checkouts. `anywhere` on
+   the body breaks a long unbroken path segment, so a name with no spaces in it
+   still wraps instead of pushing the count off the edge. */
+.disclose span {
+  min-width: 0;
+}
+
+/* What the group holds, sitting directly after the title so the heading reads
+   left-aligned: folder name, then what it holds. Never shrinks, so the count
+   stays beside the title's last line rather than being squeezed or pushed to a
+   far edge the eye has to travel to. */
+.disclose small {
+  flex: none;
+  color: var(--dim);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+/* The count of sessions waiting on the reader — asking a question, or finished
+   and wanting a next instruction. It is warm rather than matching either dot,
+   because it summarises two colours (amber asking, green finished) and picking
+   one of them would say the group held only that kind.
+
+   Bold as well as coloured: colour alone is not an answer to a reader who
+   cannot separate amber from grey, and this is the one number on the screen
+   worth finding at a glance. */
+.disclose .waiting {
+  color: var(--warn);
+  font-weight: 600;
+}
+
+/* Nothing waiting is not news. The count keeps its place so every heading reads
+   in the same shape, but drops to the quiet colour of the text beside it, so a
+   glance down the page lands only on the workspaces that want something. */
+.disclose .waiting[data-none] {
+  color: inherit;
+  font-weight: 400;
+}
+
+/* "No sessions yet." under a worktree heading, indented to the depth that
+   checkout's rows would occupy so it reads as its content, not the workspace's. */
+.tree-state {
+  position: relative;
+  margin: 0;
+  padding: 0 0 var(--gap) calc(var(--step) * 2);
+  color: var(--dim);
+  font-size: 13px;
+  /* Carries the workspace trunk past it, exactly as a session row does: this
+     note stands where that worktree's sessions would have been, and the line
+     to the worktrees below must not break across it. */
+  background-image: linear-gradient(var(--line), var(--line));
+  background-repeat: no-repeat;
+  background-position: var(--trunk) 0;
+  background-size: var(--hair) 100%;
+}
+
+/* The empty worktree is its workspace's last: nothing below it needs the trunk. */
+.tree-state[data-last] { background-image: none; }
+
+/* The indent that carries the hierarchy. A session under a worktree sits two
+   steps in; one directly under a workspace sits one, which is what makes the
+   two cases legible without a label saying so. */
+.row[data-nested] {
+  padding-left: calc(var(--step) * 2);
+  /* The workspace trunk, passing down the left of every session so a row is
+     visibly inside its worktree *and* its workspace. Painted as a background
+     gradient rather than a third pseudo-element, because an element has only
+     two and both are already spent on this row's own elbow below. */
+  background-image: linear-gradient(var(--line), var(--line));
+  background-repeat: no-repeat;
+  background-position: var(--trunk) 0;
+  background-size: var(--hair) 100%;
+}
+
+/* A session's own elbow, plus the trunk of the worktree it hangs under passing
+   down its left. Two lines from one element: the ::before is this row's join,
+   the ::after continues the parent trunk to the next sibling. */
+.row[data-nested]::before {
+  content: "";
+  position: absolute;
+  left: calc(var(--step) + var(--trunk));
+  top: 0;
+  /* Reaches its title the same way a worktree's arm reaches its own: this is
+     the last branch in the tree and the session is the leaf it points at. */
+  width: calc(var(--step) - var(--trunk) - var(--reach));
+  /* Down to the middle of the session's NAME, not the middle of the row. A row
+     is a title over a preview line over a timestamp, so its centre falls in the
+     preview — an arm there points at the description instead of the thing being
+     named. `strong` is 16px at line-height 1.5, so its midline is 0.75em down
+     from the top of the content box. */
+  height: calc(var(--gap) + 0.75em);
+  border-left: var(--hair) solid var(--line);
+  border-bottom: var(--hair) solid var(--line);
+  border-bottom-left-radius: 4px;
+}
+
+.row[data-nested]::after {
+  content: "";
+  position: absolute;
+  left: calc(var(--step) + var(--trunk));
+  /* Resumes exactly where the arm turned away, so the trunk passing this row
+     is one unbroken line rather than two segments with a jog between them. */
+  top: calc(var(--gap) + 0.75em);
+  bottom: 0;
+  border-left: var(--hair) solid var(--line);
+}
+
+/* The last session under a worktree ends the branch: its elbow stays, the
+   continuation below it does not. */
+.row[data-last]::after { display: none; }
+
+/* The final row of the final worktree ends the workspace trunk as well: the
+   gradient stops level with this row's arm instead of running to the bottom
+   edge, so the whole subtree ends on one line.
+
+   Only when the worktree is its workspace's last. A `.tree` heading's own arm
+   stops at that heading's bottom edge, so the rows underneath are what carry the
+   workspace trunk down to the *next* worktree — cutting it on every last leaf
+   severed that line and left each heading's elbow floating with nothing above
+   it. */
+.row[data-last-branch] {
+  background-size: var(--hair) calc(var(--gap) + 0.75em);
+}
+
 .row strong { display: block; }
 .row span { display: block; color: var(--dim); font-size: 14px; }
+
+/* What a session is doing, as one dot on its title's first line.
+
+   A real element rather than a pseudo-element: a nested row has spent both of
+   its own on the tree's elbow and trunk, and those lines are structure the
+   state must not cost us. It floats so a long title wraps around it instead of
+   being pushed into a second column, which keeps the full width of a phone. */
+.dot {
+  float: left;
+  width: 9px;
+  height: 9px;
+  /* Centred against the title's first line rather than its line box, so the dot
+     sits with the words instead of riding above them. */
+  margin: 7px 8px 0 0;
+  border-radius: 50%;
+  /* Finished, and the quietest of the three: most rows in a long list are in
+     this state, so it must not compete with the titles beside it. */
+  background: #2e7d32;
+}
+
+/* Stopped on the reader. The one state where nothing moves until they act, so
+   it is the only one given a warm colour — the same one the waiting count in
+   the heading above uses. */
+.row[data-state="asking"] .dot { background: var(--warn); }
+
+/* Working: a grey ring with one brighter arc, turning. Grey because work in
+   progress asks for nothing — it tells the reader to wait, not to act. */
+.row[data-state="working"] .dot {
+  background: none;
+  border: 2px solid var(--line);
+  border-top-color: var(--dim);
+}
+
+@media (prefers-color-scheme: dark) {
+  .dot { background: #4caf50; }
+  .row[data-state="working"] .dot { background: none; }
+}
+
+/* The only animation on the page, and it runs solely on rows that are actually
+   working. Transform-only, so it stays on the compositor and costs no layout,
+   and it stops the moment the row repaints in any other state. */
+@media (prefers-reduced-motion: no-preference) {
+  .row[data-state="working"] .dot { animation: spin 900ms linear infinite; }
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* A row that carries a control beside its link.
+   The link is the full width of the row and keeps its own left padding, because
+   that padding is the gutter the tree's trunk and elbow are painted in: anything
+   that takes width ahead of the link drags every connector to the right with it.
+   So Archive is lifted out of the flow and placed over the row instead, which
+   moves the button without moving the hierarchy. */
+.rowline {
+  position: relative;
+}
+
+/* Archive sits before the title and clear of the tree: it starts where the
+   link's text starts, which is the page edge on a top-level row and the far side
+   of the gutter on a nested one. Centred on the title's midline, not the row's,
+   for the same reason the branch arm is — a row is a title over a preview over a
+   timestamp, so its middle falls in the preview and a control parked there reads
+   as belonging to the description rather than to the session being named. */
+.rowline .archive {
+  position: absolute;
+  left: var(--gap);
+  top: calc(var(--gap) + 0.75em);
+  transform: translateY(-50%);
+}
+
+.rowline .row[data-nested] ~ .archive { left: calc(var(--gap) + var(--step) * 2); }
+
+/* The text starts clear of the button. Set on the link's children rather than on
+   the link, so the gutter the tree is painted in keeps the width it had. */
+.rowline .row > * { margin-left: var(--archive-width); }
+
+/* Quiet by default: archiving is rare next to opening a session, so it reads as
+   secondary until it is pressed. 44px tall to stay a comfortable tap target. */
+.archive {
+  flex: none;
+  margin-right: var(--gap);
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+  color: var(--dim);
+  font: inherit;
+  font-size: 14px;
+  touch-action: manipulation;
+}
+
+.archive[disabled] { opacity: 0.6; }
+
+/* Copying a worktree name: the same control on a heading in the list and in the
+   header above a session, so the two read as one thing.
+
+   An icon sitting inline beside the name, with no box of its own — a bordered
+   chip beside a name that wraps over three lines reads as a second thing on the
+   row rather than as part of the name it belongs to. The 44px floor is met by
+   the inset below instead of by padding, so the target is full size while the
+   mark stays the size of the text it follows. */
+.copy {
+  position: relative;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--dim);
+  /* Square, and sized from the text beside it, so the mark keeps its proportion
+     to the name at any zoom rather than being pinned to a pixel size. */
+  width: 1.4em;
+  height: 1.4em;
+  /* Aligns the glyph with the name's first line rather than its box's middle. */
+  vertical-align: -0.15em;
+  touch-action: manipulation;
+}
+
+/* The glyph fills the button, so one size is stated in one place. */
+.copy svg { width: 100%; height: 100%; display: block; }
+
+/* The moment after a copy landed. Green rather than the quiet grey, because
+   this is the one state that is news — and it lasts about a second. */
+.copy[data-done] { color: #2e7d32; }
+
+@media (prefers-color-scheme: dark) {
+  .copy[data-done] { color: #4caf50; }
+}
+
+/* The tap area, extended past the mark without disturbing the layout around it.
+   Non-negotiable 44x44, met by an invisible inset centred on the glyph rather
+   than by padding, which would push the name and the count apart to make room
+   for whitespace nobody can see. */
+.copy::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 44px;
+  height: 44px;
+  transform: translate(-50%, -50%);
+}
+
+/* On a worktree heading the copy button is a sibling of the disclosure, which
+   is itself full width — so the heading becomes the row that holds both. */
+/* The heading is a row: the disclosure, the copy button, then the count.
+   Centred rather than top-aligned, so the two controls beside the name land on
+   the name's own line — the line the branch arm arrives at — instead of each
+   sitting a line high in a band the disclosure's 56px floor has made taller. */
+/* Plain text flow, not a flex row. The heading holds three things — the
+   disclosure carrying the name, the copy mark, the count — and a flex row makes
+   each of them a block, which is exactly what parks the mark in the whitespace
+   beside a wrapped name rather than after its last word. As inline content they
+   share line boxes, so the mark follows the name the way a footnote mark
+   follows a word. */
+.tree { display: block; }
+
+/* Beside the name rather than a gap away from it: the baseline alignment above
+   puts the mark on the name's line, and this is the hair of space between the
+   last word and the mark that copies it. */
+.tree .copy { margin-left: 4px; }
+
+/* The disclosure keeps the width it had, so the tree lines drawn against the
+   heading do not move when a copy button joins the row. */
+/* Only as wide as its own content, so the copy button sits directly after the
+   name rather than being pushed to the far edge of the screen — a control an
+   inch away from the thing it acts on reads as belonging to the row below it.
+   It still shrinks, so a long name truncates instead of crowding the button
+   off the end. */
+/* A worktree heading is a row: the disclosure, then the copy button. The
+   disclosure keeps the full width it has at the workspace level, because the
+   copy button is placed *inside* that flow — right after the name — rather than
+   after the count at the far edge. See `.tree .disclose .copy` below. */
+.tree .disclose { flex: 0 1 auto; width: auto; min-width: 0; }
+
+/* The count is pushed to the end of the row, away from the name and the copy
+   button that belong together. It sits in the heading rather than in the
+   disclosure so this is a plain sibling order rather than a nested override. */
+.tree .count {
+  /* Follows the name and its copy mark in the same text flow, dropping to the
+     next line by itself when the row is full — which is right: the tally is the
+     least important of the three and the only one that may be pushed down. It
+     never folds in half, hence the nowrap. */
+  margin-left: 8px;
+  white-space: nowrap;
+  color: var(--dim);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+/* A worktree name wraps onto as many lines as it needs and is never cut short.
+   It is the one thing on the heading the reader is actually scanning for, and
+   an elided name is unusable for the purpose the copy button beside it serves.
+   The count and the copy button arrange themselves around it. */
+.tree .disclose span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Beside the name it copies, not at the far edge of the row. A control parked
+   an inch away from the thing it acts on reads as belonging to whatever it
+   happens to sit next to — here, the session row below.
+
+   Centred on the heading's own title line, which is the midline the branch arm
+   arrives at, rather than on a row whose height the count may have grown. */
+.tree .copy {
+  /* Centred on the name's own line rather than on the band, which the copy
+     button and the count would otherwise each centre themselves in separately
+     and sit a line too high.
+
+     The offset is the disclosure's own top padding plus half a line of its 13px
+     text — the same point the branch arm arrives at. It is written in `em` of
+     the heading rather than reusing the 16px-based figure the tree lines use,
+     because those are drawn against the heading box while this sits in its flow. */
+  margin-left: 8px;
+}
+
+/* The way to start work in a checkout, the first thing under its heading and
+   above the sessions already there. It is a control, not a session, so it is
+   quieter than the rows below it — but it carries the same tree gutter, so the
+   hierarchy reads through it rather than around it. */
+.starter {
+  position: relative;
+  display: block;
+  width: 100%;
+  padding: 6px 0 6px calc(var(--step) * 2);
+  /* The row itself carries no chrome: it is the full width of the list because
+     it owns the tree gutter, and a border out here would frame the hierarchy
+     rather than the control. The chrome sits on `.face` below, around the words,
+     which is the part that has to look pressable. */
+  border: 0;
+  background: none;
+  color: var(--dim);
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  min-height: 44px;
+  touch-action: manipulation;
+  /* The workspace trunk passing down its left, exactly as a session row carries
+     it, so the line runs unbroken from the heading to the last leaf. */
+  background-image: linear-gradient(var(--line), var(--line));
+  background-repeat: no-repeat;
+  background-position: var(--trunk) 0;
+  background-size: var(--hair) 100%;
+}
+
+/* What actually looks like a button: the same border, radius and background the
+   Archive control uses, so the two read as the same kind of thing rather than
+   as two unrelated inventions. Inline-flex so the box hugs its words instead of
+   stretching to the row, and so the 44px floor centres the label inside it. */
+.starter .face {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 16px;
+  /* The ink-coloured border and the weight are this page's existing way of
+     saying "this is the action" — the same pair `#dialog button.primary` uses.
+     A hairline in `--line` on a `--sunk` fill was too close in value to the
+     page behind it to register as an edge at all, which is what left this
+     reading as a line of text rather than as a control. */
+  border: 1px solid var(--ink);
+  border-radius: 8px;
+  background: var(--sunk);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* A plus, because the label alone is a sentence and a sentence reads as prose.
+   A mark in front of it says "this makes something" before the words are read.
+   Drawn as content on the face rather than as an element, so the button stays
+   one span with one string in it. */
+.starter .face::before {
+  content: "+";
+  font-size: 17px;
+  font-weight: 400;
+  line-height: 1;
+}
+
+/* Its own elbow off the worktree trunk, and that trunk continuing past it to
+   the first session below. The same two strokes a session row draws, so this
+   sits in the tree as a leaf rather than floating beside it. */
+.starter::before {
+  content: "";
+  position: absolute;
+  left: calc(var(--step) + var(--trunk));
+  top: 0;
+  width: calc(var(--step) - var(--trunk) - var(--reach));
+  /* Down to the middle of the button itself. The row's padding is symmetric and
+     holds nothing but the face, so the row's own half-height *is* the face's
+     midline — true whether the label runs to one line or three, which a fixed
+     offset is not. */
+  height: 50%;
+  border-left: var(--hair) solid var(--line);
+  border-bottom: var(--hair) solid var(--line);
+  border-bottom-left-radius: 4px;
+}
+
+.starter::after {
+  content: "";
+  position: absolute;
+  left: calc(var(--step) + var(--trunk));
+  top: 50%;
+  bottom: 0;
+  border-left: var(--hair) solid var(--line);
+}
+
+/* An empty checkout's starter is its last leaf: nothing below it to reach. */
+.starter[data-last]::after { display: none; }
+.starter[data-last] { background-size: var(--hair) 50%; }
+
+/* The workspace-level starter sits one step in rather than two, because it hangs
+   off the workspace trunk directly — it is a sibling of the worktree headings,
+   not of the sessions inside one. Its elbow moves in by the same step, so the
+   control joins the line it actually belongs to. */
+.starter[data-level="workspace"] { padding-left: var(--step); }
+
+.starter[data-level="workspace"]::before {
+  left: var(--trunk);
+  width: calc(var(--step) - var(--trunk) - var(--reach));
+}
+
+.starter[data-level="workspace"]::after { left: var(--trunk); }
+
+/* A workspace with no worktrees has nothing below its starter, so the trunk
+   stops at the elbow rather than running on into empty space. */
+.starter[data-level="workspace"][data-last] { background-image: none; }
+
+/* The row that holds a starter and its answer carries the workspace trunk past
+   both, exactly as a session row does, so the line does not break across it. */
+.starterline {
+  background-image: linear-gradient(var(--line), var(--line));
+  background-repeat: no-repeat;
+  background-position: var(--trunk) 0;
+  background-size: var(--hair) 100%;
+}
+
+/* The starter inside that wrapper must not paint the trunk a second time over
+   the one the wrapper is already drawing. */
+.starterline > .starter { background-image: none; }
+
+/* What a starter is saying about the reader's own tap: the host's refusal, in
+   full, under the button that asked for it — indented to that button's depth so
+   it reads as that control's answer rather than the list's.
+
+   Wrapped, never truncated: a refusal is the sentence a reader copies to
+   whoever can fix it, and half of one is no use to anybody. The page's error
+   colour but not its box — a bordered panel inside the tree would frame the
+   hierarchy, the same reason the starter itself carries no chrome out here. */
+.starter-state {
+  margin: 0;
+  padding: 0 0 6px calc(var(--step) * 2);
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: #c00;
+  font-size: 13px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* The workspace starter's answer lines up under the workspace starter. */
+.starterline:has(> .starter[data-level="workspace"]) .starter-state {
+  padding-left: var(--step);
+}
 
 .error {
   margin: var(--gap) 0;
@@ -191,11 +1286,103 @@ a { color: inherit; }
   /* Full-bleed across the body's side gutter. */
   margin-inline: calc(var(--gap) * -1);
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   align-items: end;
   padding: 8px var(--gap) calc(8px + env(safe-area-inset-bottom, 0px));
   background: var(--paper);
   border-top: 1px solid var(--line);
+}
+
+/* A row of actions on the draft, above the box and on a line of its own.
+   Shown only while the composer has focus: these act on text being typed, so
+   off-focus they would be a row of controls for a task nobody is doing.
+
+   :focus-within rather than a focus listener, so the row's presence cannot
+   disagree with where focus actually is. The buttons keep focus inside the
+   composer, so pressing one does not pull the row out from under the finger.
+
+   One row high, always. The buttons never wrap onto a second line: the row
+   scrolls sideways instead, so the composer's height is the same whether this
+   session has two actions or five, and the box never gets shoved down the
+   screen as buttons appear.
+
+   This is the one place the "no container that scrolls inside itself" rule is
+   set aside, and deliberately: the alternative is a bar that changes height
+   under the finger. It is a short strip of controls, not content — nothing is
+   read here, so nothing is lost by it being reachable sideways rather than by
+   page scroll.
+
+   touch-action names the one axis this strip owns. A gesture left off the list
+   is discarded rather than passed on, which is exactly what is wanted here: a
+   finger that comes down on this row can pan it sideways and nothing else, so
+   a vertical drag started on the strip does not scroll the page out from under
+   the buttons. That the page stays put is the point, not a side effect.
+
+   pinch-zoom stays granted so the page remains zoomable from here, which the
+   project's accessibility rule requires of every surface.
+
+   The buttons carry the rule too. touch-action is read from the element the
+   touch actually hits and the buttons fill the row, so naming only #actions
+   would bind the 8px gaps between them and leave every button scrolling the
+   page. pan-y is the one to avoid: it kills the sideways drag outright. */
+#actions, #actions button { touch-action: pan-x pinch-zoom; }
+
+#actions {
+  display: none;
+  flex-basis: 100%;
+  gap: 8px;
+  overflow-x: auto;
+  /* No scrollbar gutter stealing height from a 44px row. */
+  scrollbar-width: none;
+}
+#actions::-webkit-scrollbar { display: none; }
+#composer:focus-within #actions { display: flex; }
+
+/* display:flex would otherwise beat the browser's own [hidden] rule, which is
+   what hides the two buttons naming a checkout this session has none of. */
+#actions button[hidden] { display: none; }
+
+/* Undo is always present, so it says plainly when there is nothing to put back
+   rather than being a control that silently does nothing.
+
+   pointer-events keeps the disabled button hit-testable, which is what makes
+   the strip's touch-action apply over it. A disabled control is skipped by
+   hit-testing by default, so the touch resolves against whatever is behind it
+   and the page scrolls from the one button in the row that is most often
+   disabled. Restoring hit-testing does not make it pressable: `disabled` is
+   what refuses the click, the focus and the submit, and it still does. */
+#actions button:disabled {
+  opacity: 0.4;
+  pointer-events: auto;
+}
+
+/* The button labelled with the checkout's name shows it in full on one line.
+   The name is still never truncated — no ellipsis, no elision, no clipping to a
+   fixed width: the button grows as wide as the name needs and the row scrolls
+   to reach it. Wrapping is what is given up here, not the name, so a control
+   that inserts a name still cannot disagree with the name it inserts. */
+#insert-worktree {
+  white-space: nowrap;
+  text-align: left;
+}
+
+#actions button {
+  /* Small, as a secondary action beside the box: this is a row of minor
+     operations on the draft, not a second Send. The tap target stays the full
+     44px the touch rules require — the padding buys the height, so what reads
+     as small is the text, not the area a finger has to find. */
+  min-height: 44px;
+  /* Natural width rather than squeezed to fit, which is what makes the row
+     overflow and scroll sideways instead of shrinking its labels. */
+  flex: none;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--sunk);
+  color: var(--dim);
+  font: inherit;
+  font-size: 13px;
 }
 
 /* Errors sit above the composer and scroll with the document, so a repaint of
@@ -220,11 +1407,28 @@ a { color: inherit; }
   field-sizing: content;
 }
 
-/* A waiting question sits after the transcript, where the newest thing is. */
-#ask form { padding: var(--gap) 0; border-bottom: 1px solid var(--line); }
-#ask label { display: flex; gap: 10px; align-items: center; min-height: 44px; }
-.other { display: block; width: 100%; margin-bottom: 8px; }
+/* A waiting question sits after the transcript, where the newest thing is. The
+   bottom rule separates one waiting request from the next; it is deliberately
+   not given to the kept transcript row, which already has the rows around it to
+   bound it.
+
+   The block padding only: the inline padding belongs to the amber-rule rule
+   above, which the waiting form shares with the kept row, and a shorthand here
+   would reset the left padding that rule depends on. */
+#ask form, #approval form { padding-block: var(--gap); border-bottom: 1px solid var(--line); }
+#approval form { padding-inline: 0; }
+/* A permission request is a decision made of buttons rather than a list of
+   options, so the two controls share one row and each carries a full tap target. */
+#approval form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+#approval .question, #approval .detail, #approval .oneshot, #approval .state { flex-basis: 100%; }
+/* The one-shot nature is a fact about the decision, not a warning, so it reads
+   as quiet supporting text rather than competing with the reason above it. */
+#approval .oneshot { color: var(--dim); font-size: 13px; }
+/* The free-text option shares a row with its own tick, so the field takes the
+   rest of the row rather than a line of its own. */
+.other { flex: 1; min-width: 0; }
 .question { font-weight: 600; }
+.from { color: var(--dim); font-size: 13px; }
 .detail { white-space: pre-wrap; }
 
 /* Press feedback is applied by script after a deliberate hold. There is no
@@ -232,10 +1436,26 @@ a { color: inherit; }
 [data-pressed] { opacity: 0.6; }
 
 @media (hover: hover) {
-  #pick:hover, #send:hover, #ask button:hover, .row:hover { background: var(--line); }
+  #pick:hover, #send:hover, #ask button:hover, #approval button:hover, .row:hover, #actions button:hover { background: var(--line); }
+  .archive:hover { background: var(--line); color: var(--ink); }
+  .starter:hover .face { background: var(--line); }
+  /* The copy mark has no box of its own, so it answers a cursor by darkening
+     rather than by filling — a background here would paint a grey slab tight
+     around the glyph and put back the chip this control stopped being. */
+  /* Not while it is reporting a copy: the tick is green for about a second and
+     a cursor resting on the mark that was just clicked would otherwise repaint
+     it as ordinary ink — hiding the one piece of feedback the control gives. */
+  .copy:not([data-done]):hover { color: var(--ink); }
+  #menu button:hover { background: var(--line); }
+  /* The title is a control, so it says so under a cursor. Decorative only: it
+     opens the same menu whether or not anything is hovering it. */
+  #title:hover { color: var(--dim); }
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  /* Nothing animates: a continuously animating page is a battery cost with no
-     information in it. There are no spinners by design. */
+  /* The turning dot on a working session is the one animation on the page, and
+     it lives with the rest of that rule beside `.dot` above. It earns its
+     battery cost by carrying information: it runs only while a session really
+     is working, and it stops when that stops. Nothing else animates — a
+     continuously animating page is a cost with nothing in it. */
 }

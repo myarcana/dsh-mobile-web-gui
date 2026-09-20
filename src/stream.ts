@@ -19,8 +19,10 @@ import type { AssistantStreamFrame } from '@deepseek-ai/dsh-agent'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import { Corpus } from './corpus.ts'
-import { Questions } from './questions.ts'
-import { renderEvent } from './render.ts'
+import { Bridge } from './bridge.ts'
+import { Notifier } from './notifier.ts'
+import { Subscribers } from './subscribers.ts'
+import { answeredNow, ASK_TOOL, renderEvent } from './render.ts'
 import { tail } from './sessions.ts'
 
 /** Live token flushes per second are what hurt on a bad link; coalesce to this. */
@@ -55,11 +57,24 @@ export class StreamHub {
   /** Boot id. Durable seqs survive a restart; summary watermarks do not. */
   readonly epoch = Date.now().toString(36)
 
-  /** Questions held for browsers to answer; a change reaches every client as a summary refresh. */
-  readonly questions: Questions
+  /**
+   * Questions browsers may answer; a change reaches every client as a summary refresh.
+   *
+   * The {@link Bridge} reads them from the harness's own provider seam rather
+   * than holding them here, because on this harness the single provider slot
+   * belongs to the native UI. The property keeps its name because every reader
+   * of it asks the same two questions either way.
+   */
+  readonly questions: Bridge
 
   /** The session list, read from the whole corpus rather than from live agents. */
   readonly corpus: Corpus
+
+  /** The browsers that asked to be told when a session stops and wants them. */
+  readonly subscribers: Subscribers
+
+  /** Turns listing changes into notifications for those browsers. */
+  readonly notifier: Notifier
 
   private readonly clients = new Set<Client>()
   private readonly live = new Map<string, Live>()
@@ -73,20 +88,23 @@ export class StreamHub {
   /**
    * Subscribe to the harness once and fan out to connected clients.
    * @param ctx - the plugin context, whose disposal unsubscribes.
+   * @param hostOrigin - the harness API's origin, which the question bridge attaches to.
    */
-  constructor(ctx: Context) {
+  constructor(ctx: Context, hostOrigin: string) {
     this.ctx = ctx
     // A question arriving or settling appends nothing to the log, so it pushes
     // its own refresh — and must force one, because the rows it changes (the
     // ask badges) are not derived from any log and so move no corpus version.
-    this.questions = new Questions(ctx, () => { void this.refreshSummaries(true) })
+    this.questions = new Bridge(ctx, hostOrigin, () => { void this.refreshSummaries(true) })
     // The corpus refreshes on its own when a background read fills in a row,
     // which is how a cold session's content reaches the list without the first
     // paint waiting on a disk read for every session on the box.
     this.corpus = new Corpus(ctx, () => { void this.refreshSummaries() })
+    this.subscribers = new Subscribers()
+    this.notifier = new Notifier(ctx, this.subscribers)
     ctx.on('session/event', (session: Session, event: SessionEvent) => {
       this.corpus.noteEvent(session.id)
-      this.onEvent(session.id, event)
+      this.onEvent(session.id, event, session)
     })
     ctx.on('agent/assistant-stream', payload => {
       this.onStreamFrame(payload.agent.session.id, payload.frame)
@@ -172,8 +190,16 @@ export class StreamHub {
    * session, and a summary refresh to everyone.
    * @param id - the session whose log grew.
    * @param event - the appended event.
+   * @param session - the session it landed in, for pairing an answer to its question.
    */
-  private onEvent(id: SessionId, event: SessionEvent): void {
+  private onEvent(id: SessionId, event: SessionEvent, session: Session): void {
+    // The durable message is the only thing that ends a hold. Released before
+    // the frame is written, so the summary refresh below already reflects it and
+    // no client can be told "sending" and "delivered" in the same breath.
+    this.releaseAccepted(id, event)
+    // No settled set: a call arriving live is by definition not settled yet, and
+    // an ask therefore renders nothing here. Its row arrives from
+    // `amendAnswered` below, on the result event that also drops the form.
     const html = renderEvent(event, id)
     if (html !== null) {
       for (const client of this.clients) {
@@ -183,8 +209,81 @@ export class StreamHub {
         this.send(client, 'e', { sessionId: id, seq: event.seq, html }, cursor(this.epoch, client, id, event.seq))
       }
     }
+    // An answer renders no frame of its own: it belongs on the question's form,
+    // which is already on screen. Re-send that row with the choices ticked, so a
+    // question answered while someone is watching settles into exactly the shape
+    // a reload would give it.
+    this.amendAnswered(id, event, session)
     this.live.delete(id)
     void this.refreshSummaries()
+  }
+
+  /**
+   * Retire the in-flight key a durable message carries.
+   *
+   * This is the handover that makes the two states mutually exclusive: the key
+   * stops being held at exactly the moment the transcript can show the message
+   * as delivered. Nothing else releases a hold, so the page can never be left
+   * rendering a prompt that is in neither state.
+   * @param id - the session whose log grew.
+   * @param event - the appended event, acted on only when it is a composed prompt.
+   */
+  private releaseAccepted(id: SessionId, event: SessionEvent): void {
+    if (event.type !== 'user/message') return
+    const source: { kind?: unknown; clientMessageId?: unknown } = event.data.source
+    if (source.kind !== 'webgui' || typeof source.clientMessageId !== 'string') return
+    this.questions.accepted.release(id, source.clientMessageId)
+  }
+
+  /**
+   * Re-send an answered question's row once its result lands.
+   * @param id - the session the answer landed in.
+   * @param event - the appended event, which is only acted on when it is an ask result.
+   * @param session - the session, read to find the call the answer belongs to.
+   */
+  private amendAnswered(id: SessionId, event: SessionEvent, session: Session): void {
+    if (event.type !== 'tool/result') return
+    const [block] = event.data.message.content
+    if (block === undefined || block.type !== 'tool-result') return
+    // The question is an earlier event in this same log, found by the call id the
+    // result carries rather than by position: a nested run can put any number of
+    // events between the two.
+    const call = session.events.find(
+      candidate => candidate.type === 'tool/call' && candidate.data.callId === block.toolCallId,
+    )
+    if (call === undefined) return
+    // Only an ask has a row that changes when its result lands. Every other tool
+    // call was already drawn as its own row when it arrived, and re-sending it
+    // here made the client apply that row a second time: `append`'s amend branch
+    // seats a row the log has no `data-seq` match for, so a call already folded
+    // into a run was re-seated *beside* the line standing for it and counted
+    // twice. A five-call run drew as nine, growing with every call.
+    //
+    // The old guard was `renderEvent(call, …) === null`, which reads as "only an
+    // ask survives" but is the wrong test: it is passed the *call*, and an
+    // ordinary tool call renders a perfectly good row. Ask the question the
+    // frame actually depends on instead — is this the tool whose row is the
+    // exchange itself?
+    if (call.data.name !== ASK_TOOL) return
+    // Read through `answeredNow` rather than `answerIndex`: this event has not
+    // been persisted yet, so it carries no surface op and the log-scanning index
+    // would reject it — redrawing the question with nothing ticked and the typed
+    // answer missing until a reload. Not gated on there being answers either: a
+    // cancelled or failed ask has been drawing nothing until now too, so it
+    // needs this frame just as much. The guard above is what keeps this to asks
+    // alone.
+    const { answers, settled } = answeredNow(event, block.toolCallId)
+    const html = renderEvent(call, id, answers, settled)
+    if (html === null) return
+    for (const client of this.clients) {
+      if (client.focus !== id) continue
+      // `amends` is still correct when the client has no such row yet: a waiting
+      // ask renders nothing, so this is the row's first appearance and the
+      // client inserts it at the call's own seq rather than at the bottom, which
+      // is where a reload would put it. No cursor either way — the seq is behind
+      // the stream's resume point and must not drag it back.
+      this.send(client, 'e', { sessionId: id, seq: call.seq, amends: call.seq, html })
+    }
   }
 
   /**
@@ -252,13 +351,26 @@ export class StreamHub {
    * Recompute and broadcast session summaries.
    */
   private async refreshSummaries(force = false): Promise<void> {
-    if (this.clients.size === 0) return
+    // Notifications are the reason this no longer returns early on an empty
+    // client set. The whole point of a push notification is to reach a reader
+    // who has *no page open*, which is precisely when `clients` is empty — so
+    // skipping the fold here would have switched the feature off in exactly the
+    // case it exists for. The listing is still only recomputed when something
+    // actually changed, and with nobody connected there is nothing to send it
+    // to, so the cost of getting here is one corpus read.
+    const watching = this.clients.size > 0
     // A session event that changed no visible row (a tool event on a session
     // nobody has opened, say) must not cost every client a full re-list.
     if (!force && this.corpus.version === this.sentVersion) return
     this.sentVersion = this.corpus.version
     this.summarySeq += 1
     const listing = await this.corpus.listing(this.questions)
+    // Before the send, so a reader whose phone is asleep and whose tab is long
+    // gone is told at the same moment a connected one would have seen the dot
+    // change. Never awaited: delivery crosses the public internet to a push
+    // service, and the broadcast below must not wait on it.
+    this.notifier.observe(listing.rows)
+    if (!watching) return
     for (const client of this.clients) {
       client.summarySeq = this.summarySeq
       this.send(client, 's', listing, cursor(this.epoch, client, client.focus, null))
@@ -284,8 +396,15 @@ export class StreamHub {
    * @param from - exclusive lower bound the client already holds.
    */
   private async sendTail(client: Client, id: SessionId, from: number): Promise<void> {
-    const { html, renderedThrough, empty } = await tail(this.ctx, id, from)
-    this.send(client, 'e', { sessionId: id, seq: renderedThrough, html, replace: from < 0, empty },
+    const { html, renderedThrough, empty, more, oldest } = await tail(this.ctx, id, from)
+    // `more` rides the replace frame for the same reason `empty` does: only a
+    // whole-tail read repaints the log, and only it can say what sits behind
+    // the window it just painted. `oldest` rides with it because a replace
+    // throws away any history already prepended, so the page's bound for reading
+    // further back has to be restated from the window that replaced it — and the
+    // page cannot derive it, since a kept prompt puts the log's first message on
+    // screen with the work behind it still unread.
+    this.send(client, 'e', { sessionId: id, seq: renderedThrough, html, replace: from < 0, empty, more, oldest },
       cursor(this.epoch, client, id, renderedThrough))
   }
 

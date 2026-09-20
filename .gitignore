@@ -1,3 +1,7 @@
 node_modules/
 lib/
 .DS_Store
+# Local-only: the git checkouts scripts/make-fixtures.sh builds for the mock,
+# and the typecheck config pointing at the globally installed harness.
+.fixtures/
+tsconfig.check.json

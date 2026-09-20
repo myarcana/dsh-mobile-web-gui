@@ -49,6 +49,16 @@ export interface SessionSummary {
    * record owns sort after every workspace.
    */
   readonly workspaceOrder: number
+  /**
+   * Stable id of the worktree this row files under, or `''` for none.
+   *
+   * Empty where the session's directory is in no repository, which is a real
+   * answer rather than a missing one: those rows hang directly under their
+   * workspace instead of under an invented heading.
+   */
+  readonly worktreeId: string
+  /** The worktree heading text — its directory's name — or `''` when there is no worktree level. */
+  readonly worktree: string
   /** One line of the most recent content. */
   readonly lastLine: string
   /**
@@ -69,9 +79,32 @@ export interface SessionSummary {
    * notion of a user role exists in the page's source and a capability cannot
    * be present in one operator's view and silently absent from another's.
    */
-  readonly actions: readonly ('send' | 'stop')[]
+  readonly actions: readonly ('send' | 'stop' | 'archive')[]
+  /**
+   * Prompts this server has accepted for this session but the log does not show yet.
+   *
+   * The browser's own `clientMessageId`s, echoed back. This is the server's
+   * answer to "is my message on its way?", and it exists so the page never has
+   * to infer that from a queue only the page can see: a prompt is Queued when
+   * this server has never named its key, Sending while the key is named here,
+   * and Delivered once the transcript carries the durable message. The three
+   * states come from one authority, so there is nothing left to reconcile.
+   *
+   * Empty for the overwhelmingly common case, and never grows beyond the
+   * prompts genuinely in flight — a key is retired the moment its message is
+   * appended to the log.
+   */
+  readonly sending: readonly string[]
   /** Questions this session's agent is waiting on a person to answer, oldest first. */
   readonly asks: readonly PendingAsk[]
+  /**
+   * Permissions this session's agent is waiting on a person to grant, oldest first.
+   *
+   * A sibling of {@link SessionSummary.asks} rather than a member of it: a
+   * question and a permission request are answered through different endpoints
+   * with different vocabularies, and a reader acts on them differently.
+   */
+  readonly approvals: readonly PendingApproval[]
 }
 
 /**
@@ -91,12 +124,60 @@ export interface WorkspaceGroup {
   readonly order: number
 }
 
+/**
+ * One worktree heading, nested under the workspace that holds it.
+ *
+ * Every worktree on disk gets one, whether or not a session is filed under it:
+ * a checkout is a place the reader made and can start work in, so a workspace's
+ * headings describe the project rather than only today's activity. This mirrors
+ * {@link WorkspaceGroup}, where an empty workspace keeps its heading too.
+ *
+ * One heading per workspace is synthetic: the {@link UNKNOWN_WORKTREE} bucket
+ * for sessions whose worktree cannot be determined. The harness records a single
+ * cwd per session — the project folder, not the checkout — so a session that
+ * never named its worktree genuinely has no derivable one, and saying so is
+ * better than filing it under a guess. A checkout **deleted** after its session
+ * ran is not that case: the session's own evidence still names it, so its
+ * heading carries the folder's real name with `(deleted)` after it, and
+ * {@link departed} marks it as a place that is gone.
+ */
+export interface WorktreeGroup {
+  /** Matches {@link SessionSummary.worktreeId}. */
+  readonly id: string
+  /** The workspace heading this nests under. */
+  readonly workspaceId: string
+  /** The heading text: the working tree's own directory name. */
+  readonly title: string
+  /** Where this heading sorts within its workspace, lowest first. */
+  readonly order: number
+  /**
+   * Whether this names a checkout that is gone from disk.
+   *
+   * {@link title} carries the real name either way, because the reader watched
+   * the folder exist and knows what it was called. This flag is what lets a
+   * surface act on the difference — there is no directory left to open, so a
+   * control that would start work inside it must not promise one.
+   */
+  readonly departed?: boolean
+}
+
+/**
+ * Id suffix marking the bucket for sessions with no determinable worktree.
+ *
+ * A real id, not a blank: the session list is always three levels deep, so a
+ * session that cannot be placed still needs a heading to sit under rather than
+ * being promoted to the workspace level.
+ */
+export const UNKNOWN_WORKTREE = 'wt:unknown'
+
 /** One session-list frame: every heading in render order, and every visible row. */
 export interface SessionListing {
   /** The rows, newest first, each naming its group by {@link SessionSummary.workspaceId}. */
   readonly rows: readonly SessionSummary[]
   /** Every heading to render, in order, including ones with no rows. */
   readonly groups: readonly WorkspaceGroup[]
+  /** Every worktree heading, each naming the workspace it nests under. */
+  readonly worktrees: readonly WorktreeGroup[]
 }
 
 /** A session this server just created. */
@@ -147,6 +228,42 @@ export interface PendingAsk {
   readonly askId: string
   /** The questions exactly as the agent asked them. */
   readonly questions: readonly AskUserQuestionItem[]
+  /**
+   * The child asking, when this request was carried up from a hidden subagent.
+   *
+   * Absent for a session's own question. Present means the form is rendered in
+   * an ancestor's transcript, so it must name the child or it reads as the
+   * ancestor's own question.
+   */
+  readonly from?: string
+}
+
+/**
+ * A permission an agent is waiting on, as the browser renders it.
+ *
+ * The harness's own vocabulary: `allowed-once` and `rejected` are the only two
+ * outcomes a client may send, and a grant is one-shot — the same action asks
+ * again next time. Carried whole rather than as a sentence so the form can put
+ * the tool's name and the agent's reason in separate, selectable places.
+ */
+export interface PendingApproval {
+  /**
+   * The id a decision names, which is the host's `rpcId` for this request.
+   *
+   * Deliberately the same field name {@link PendingAsk.askId} uses: it is the
+   * same notion — the handle that reaches only the tool call that asked — so the
+   * outbox and the routes keep one vocabulary for "the thing being answered".
+   */
+  readonly askId: string
+  /** The tool asking for permission, as the agent named it; `''` when unnamed. */
+  readonly toolName: string
+  /** The one-shot grant the reader is being asked for, in the agent's own words; `''` when unstated. */
+  readonly reason: string
+  /**
+   * The child asking, when this permission was carried up from a hidden
+   * subagent. Absent for a session's own request; see {@link PendingAsk.from}.
+   */
+  readonly from?: string
 }
 
 /** A durable transcript frame for the focused session. */

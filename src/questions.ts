@@ -1,109 +1,21 @@
 /**
- * Questions an agent is waiting on a person to answer.
+ * Admitting a browser-supplied answer.
  *
- * The harness asks through the `user-questions/request` waterfall and keeps no
- * record of it: a question exists only as the promise its tool call awaits.
- * The host holds that promise here and every browser reads it from the session
- * summaries, so a dropped signal, a slept radio and a reopened tab all come
- * back to the same waiting question.
+ * This module used to *hold* the questions too, by listening on a
+ * `user-questions/request` waterfall. That event does not exist on this harness
+ * (0.1.1-rc.1): `ask_user_question` is a service with a single provider slot,
+ * `ctx.userQuestions.registerProvider`, and that slot belongs to the native web
+ * UI. The listener therefore never fired once, and the answer form it fed was
+ * unreachable — a whole feature that looked implemented and was not.
  *
- * A harness restart still loses it, because the tool call awaiting it dies
- * with the process. That limit is the harness's.
+ * The questions now come from `./bridge.ts`, which mirrors the harness's own
+ * question stream and settles answers through its `/api/respond`. What stays
+ * here is the part that was always this module's: turning an untrusted JSON
+ * body into the shape the harness accepts.
  * @module
  */
 
-import type { Context } from '@deepseek-ai/cordis'
-import type { AskUserQuestionAnswer, AskUserQuestionAnswerItem } from '@deepseek-ai/dsh-user-questions'
-import { randomUUID } from 'node:crypto'
-import type { PendingAsk, SendAccepted } from './types.ts'
-
-/** Answered asks remembered, so a resend after a lost response reads as a duplicate rather than a refusal. */
-const ANSWERED_KEPT = 1000
-
-/** One waiting question and the way to settle the tool call awaiting it. */
-interface Waiting extends PendingAsk {
-  readonly sessionId: string
-  readonly settle: (outcome: AskUserQuestionAnswer | Error) => void
-}
-
-/** The questions this server is holding, keyed by the ask id it minted. */
-export class Questions {
-  private readonly waiting = new Map<string, Waiting>()
-  /** Ask id to the outbox key of the answer that settled it. */
-  private readonly answered = new Map<string, string>()
-
-  /**
-   * Answer every agent-scoped question from this GUI.
-   *
-   * Prepended, so that if anything else in the harness also registers as an
-   * answerer, this GUI still sees every question first. A request with no
-   * agent belongs to no session, so it passes on.
-   * @param ctx - the plugin context; disposing it fails whatever is still waiting.
-   * @param changed - called whenever the waiting set changes, to refresh summaries.
-   */
-  constructor(ctx: Context, changed: () => void) {
-    ctx.on('user-questions/request', (request, next) => {
-      const sessionId = request.agent?.session.id
-      if (sessionId === undefined) return next()
-      const signal = request.signal
-      return new Promise<AskUserQuestionAnswer>((resolve, reject) => {
-        const askId = randomUUID()
-        const abort = (): void => { settle(new Error('the question was cancelled', { cause: signal?.reason })) }
-        const settle = (outcome: AskUserQuestionAnswer | Error): void => {
-          this.waiting.delete(askId)
-          signal?.removeEventListener('abort', abort)
-          changed()
-          if (outcome instanceof Error) reject(outcome)
-          else resolve(outcome)
-        }
-        signal?.addEventListener('abort', abort, { once: true })
-        this.waiting.set(askId, { askId, sessionId, questions: request.questions, settle })
-        changed()
-        // An abort that landed before the listener was added never fires it.
-        if (signal?.aborted === true) abort()
-      })
-    }, true)
-    ctx.effect(() => () => {
-      for (const waiting of this.waiting.values()) {
-        waiting.settle(new Error('the web GUI stopped before this question was answered'))
-      }
-    }, 'webGui.questions()')
-  }
-
-  /**
-   * The questions one session is waiting on, oldest first.
-   * @param sessionId - the session.
-   * @returns what the browser renders, without the settle function.
-   */
-  of(sessionId: string): PendingAsk[] {
-    const asks: PendingAsk[] = []
-    for (const waiting of this.waiting.values()) {
-      if (waiting.sessionId === sessionId) asks.push({ askId: waiting.askId, questions: waiting.questions })
-    }
-    return asks
-  }
-
-  /**
-   * Settle one waiting question, exactly once however many times it is sent.
-   * @param askId - the ask being answered.
-   * @param clientMessageId - the browser's outbox key for this answer.
-   * @param answers - one answer per question.
-   * @returns the acceptance, or null when the question is no longer waiting for this answer.
-   */
-  answer(askId: string, clientMessageId: string, answers: AskUserQuestionAnswerItem[]): SendAccepted | null {
-    const settledBy = this.answered.get(askId)
-    if (settledBy !== undefined) return settledBy === clientMessageId ? { accepted: true, duplicate: true } : null
-    const waiting = this.waiting.get(askId)
-    if (waiting === undefined) return null
-    this.answered.set(askId, clientMessageId)
-    for (const oldest of this.answered.keys()) {
-      if (this.answered.size <= ANSWERED_KEPT) break
-      this.answered.delete(oldest)
-    }
-    waiting.settle({ answers })
-    return { accepted: true, duplicate: false }
-  }
-}
+import type { AskUserQuestionAnswerItem } from '@deepseek-ai/dsh-user-questions'
 
 /**
  * Admit a browser-supplied answer list.
