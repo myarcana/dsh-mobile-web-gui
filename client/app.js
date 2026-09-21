@@ -37,13 +37,14 @@ const bar = document.querySelector('header')
 const undo = document.getElementById('undo')
 const insertWorktree = document.getElementById('insert-worktree')
 const rebase = document.getElementById('rebase')
+const merge = document.getElementById('merge')
 
 // Per session, keyed by id: the composer draft.
 const drafts = new Map()
 
-// The draft the last Clear or Rebase displaced, or null when there is nothing
-// to put back. Declared up here for the same reason the buttons are: the first
-// render reaches `forgetUndo` during module evaluation.
+// The draft the last Clear, Rebase or Merge displaced, or null when there is
+// nothing to put back. Declared up here for the same reason the buttons are:
+// the first render reaches `forgetUndo` during module evaluation.
 let undone = null
 
 // The session whose pre-filled box has not been handed to the reader yet. A
@@ -60,7 +61,27 @@ let opening = null
 // header that says nothing about it until the first file is written would be
 // this page forgetting something it was just told. The server's own answer
 // replaces this as soon as it has one.
-const started = new Map()
+//
+// Kept in `localStorage` rather than only in memory, because the window this
+// covers outlives the page that opened it. A session started in a checkout and
+// left empty — the reader tapped "New session in develop", then reloaded, or
+// sent the URL to a phone — has nothing on the server to place it by, so an
+// in-memory map would answer for the tab that made it and nowhere else. The
+// name is also what Rebase and Merge write into their prompts, so losing it
+// turns two working buttons into a question the reader has to answer again.
+const WORKTREE_KEY = 'worktree:'
+
+const started = {
+  get (id) {
+    try { return localStorage.getItem(WORKTREE_KEY + id) } catch (error) { return null }
+  },
+  set (id, name) {
+    try { localStorage.setItem(WORKTREE_KEY + id, name) } catch (error) { /* full or refused: the header falls back to asking */ }
+  },
+  delete (id) {
+    try { localStorage.removeItem(WORKTREE_KEY + id) } catch (error) { /* nothing to drop */ }
+  }
+}
 
 errors.mount(document.getElementById('errors'))
 keyboard.track(composer)
@@ -399,6 +420,11 @@ function showWorktree (name) {
   if (name === null || name === undefined || name === '') {
     where.hidden = true
     where.replaceChildren()
+    // Forget the name the line was built for along with the line itself.
+    // Leaving it set would make a later paint of that same name a no-op against
+    // an empty strip — which is exactly what happens when the reader answers the
+    // prompt with the name this session had before the list said otherwise.
+    delete where.dataset.worktree
     showWorktreeActions(null)
     return
   }
@@ -486,18 +512,52 @@ box.addEventListener('input', () => {
 // on the next visit to this session. Unlike sending, it is recoverable.
 document.getElementById('clear').addEventListener('click', () => { replaceDraft('') })
 
-// The two buttons that name the checkout. Hidden rather than disabled where the
-// server has not placed the session yet: a button labelled with an empty name,
-// and a Rebase that names nothing, are both controls for a question this page
-// cannot yet answer. They appear the moment the name arrives.
+// Rebase and Merge are always offered; only the button that *is* the name comes
+// and goes.
 //
-// The name is read from the button's own label at press time rather than held
-// in a variable, so what is inserted is always what the reader can see.
+// The two prompt-writers do not need the name in advance — they need it at
+// press time, and where the page does not have one it can ask. Hiding them
+// instead made the checkout the page happened to know about the gate on an
+// action the reader could perfectly well name themselves, which is how a
+// session started from "New session in develop" and then left empty — nothing
+// written, so nothing for the server to derive a checkout from — offered no
+// Merge at all.
+//
+// Insert stays conditional, because it is different in kind: its whole content
+// is the name. A button labelled with an empty string is not a control, and
+// prompting for a name in order to type that name into the box is a longer way
+// of typing it.
 function showWorktreeActions (name) {
   const known = name !== null
   insertWorktree.hidden = !known
-  rebase.hidden = !known
   if (known) insertWorktree.textContent = name
+}
+
+// The checkout to write into a prompt, asked for when the page has none.
+//
+// Read from the Insert button's own label whenever it is showing, so what is
+// written is always what the reader can see. Otherwise the reader is asked, and
+// the answer is kept against this session: it is the same fact the server would
+// have supplied, so it stands until the server supplies it, and Merge after
+// Rebase does not ask twice.
+//
+// `null` when the reader cancels, which is not a failure — it is them declining
+// to answer, and the draft they already have is left untouched.
+function worktreeName () {
+  if (!insertWorktree.hidden) return insertWorktree.textContent
+  const id = view.current()
+  const asked = prompt('Which worktree? This session has not written anything yet,'
+    + ' so its checkout cannot be read from disk.')
+  if (asked === null) return null
+  const name = asked.trim()
+  if (name === '') return null
+  if (id !== null) {
+    started.set(id, name)
+    // Paint it: the header names the checkout and Insert becomes available, so
+    // the answer shows up everywhere the derived name would have.
+    showWorktree(name)
+  }
+  return name
 }
 
 // Insert at the caret, replacing whatever is selected — the bare name, no
@@ -518,16 +578,26 @@ insertWorktree.addEventListener('click', () => {
 })
 
 rebase.addEventListener('click', () => {
-  const name = insertWorktree.textContent
+  const name = worktreeName()
+  if (name === null) return
   replaceDraft('Pull develop, then rebase ' + name
     + ' onto develop, then review develop..' + name)
 })
 
-// What Clear and Rebase both do: put a new draft in the box, keeping the one
-// they displaced so a stray tap is recoverable. Focus returns to the box rather
-// than staying on the button, because the keyboard is open and the reader's next
-// act is typing. It also keeps focus inside the composer, which is what holds
-// the action row on screen.
+merge.addEventListener('click', () => {
+  const name = worktreeName()
+  if (name === null) return
+  replaceDraft('pull develop, rebase ' + name
+    + ' onto develop, then apply all the work of ' + name
+    + ' onto develop, then push develop, then clean up and remove the '
+    + name + ' worktree')
+})
+
+// What Clear, Rebase and Merge all do: put a new draft in the box, keeping the
+// one they displaced so a stray tap is recoverable. Focus returns to the box
+// rather than staying on the button, because the keyboard is open and the
+// reader's next act is typing. It also keeps focus inside the composer, which
+// is what holds the action row on screen.
 function replaceDraft (text) {
   // Only a replacement that actually displaces something is worth undoing;
   // clearing an empty box would otherwise arm Undo to restore nothing.
@@ -548,9 +618,9 @@ function forgetUndo () {
   undo.disabled = true
 }
 
-// Restores exactly one step: the draft the last Clear or Rebase displaced. The
-// text being displaced now becomes the next thing to restore, so a reader who
-// undoes by mistake can press it again and get back.
+// Restores exactly one step: the draft the last Clear, Rebase or Merge
+// displaced. The text being displaced now becomes the next thing to restore, so
+// a reader who undoes by mistake can press it again and get back.
 undo.addEventListener('click', () => {
   if (undone === null) return
   const back = undone

@@ -171,7 +171,7 @@ ${notice(entry, unresolved)}
      one line that scrolls sideways, so anything placed after it would be pushed
      off the visible end and have to be scrolled to. Keep the fixed-width,
      short-labelled actions first, where they are always in view. -->
-<div id=actions><button type=button id=clear>Clear</button><button type=button id=rebase hidden>Rebase</button><button type=button id=undo disabled>Undo</button><button type=button id=insert-worktree hidden></button></div>
+<div id=actions><button type=button id=clear>Clear</button><button type=button id=merge>Merge</button><button type=button id=rebase>Rebase</button><button type=button id=undo disabled>Undo</button><button type=button id=insert-worktree hidden></button></div>
 <textarea id=box rows=1 placeholder="Message this session" enterkeyhint=send></textarea>
 <button id=send type=submit>Send</button>
 </form>
