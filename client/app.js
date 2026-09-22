@@ -71,14 +71,35 @@ let opening = null
 // turns two working buttons into a question the reader has to answer again.
 const WORKTREE_KEY = 'worktree:'
 
+// Memory backs the store rather than deferring to it. A browser that refuses
+// `localStorage` — private mode, blocked third-party storage, a quota already
+// full — throws on both read and write, and a store that only ever consulted
+// disk would answer `null` to the very name it was handed a moment ago. That
+// turns a recorded checkout back into a question, which is what made Rebase and
+// Merge re-ask for something the page had already been told.
+//
+// So the map is the answer and the disk is the durable copy of it: writes go to
+// both, reads prefer the map and fall back to disk for a name this page did not
+// see recorded (a reload, or another tab's create).
+const remembered = new Map()
+
 const started = {
   get (id) {
-    try { return localStorage.getItem(WORKTREE_KEY + id) } catch (error) { return null }
+    if (remembered.has(id)) return remembered.get(id)
+    try {
+      const name = localStorage.getItem(WORKTREE_KEY + id)
+      // Cache the disk's answer so a store that starts refusing mid-session does
+      // not lose a name this page has already read successfully.
+      if (name !== null) remembered.set(id, name)
+      return name
+    } catch (error) { return null }
   },
   set (id, name) {
-    try { localStorage.setItem(WORKTREE_KEY + id, name) } catch (error) { /* full or refused: the header falls back to asking */ }
+    remembered.set(id, name)
+    try { localStorage.setItem(WORKTREE_KEY + id, name) } catch (error) { /* full or refused: memory still answers for this page */ }
   },
   delete (id) {
+    remembered.delete(id)
     try { localStorage.removeItem(WORKTREE_KEY + id) } catch (error) { /* nothing to drop */ }
   }
 }
@@ -104,6 +125,15 @@ if (boot.sessionId !== null) {
 }
 ask.render(boot.sessionId, wire.asks(boot.asks))
 approval.render(boot.sessionId, wire.approvals(boot.approvals))
+// The waiting question outranks the newest message as the thing to open at, and
+// it only exists as of the line above. `view.open` ran before it and anchored on
+// the transcript, so on a cold deep link the anchor is taken again now that the
+// form it should have chosen is actually in the document.
+//
+// Only on the first paint, and only where the session is already standing: an
+// in-app tap reaches this through the route handler instead, where the tail
+// lands after the forms and anchors itself.
+if (boot.sessionId !== null) view.reanchor()
 create.show(boot.showTools === true)
 
 // A created session is not a log event, so nothing else would take the reader
@@ -149,17 +179,13 @@ stream.connect({
   summaries (listing) {
     chooser.update(listing)
     create.update(listing)
-    // The s frames carry each session's latest seq, so a stale cached render is
-    // detected before the reader ever taps it.
+    // The s frames carry each session's last durable seq, so a stale cached
+    // render is detected before the reader ever taps it.
     //
-    // The session on screen is deliberately exempt. `latestSeq` is the corpus's
-    // folded seq, recomputed a fold window after the events land, while
-    // `renderedThrough` is the stream seq painted the moment it arrived. So a
-    // session being written is *routinely* rendered ahead of its own summary,
-    // and treating that as proof of a reset blanked the transcript, printed
-    // "Loading…" and re-read the whole tail on every summary frame of every
-    // live turn. The stream is the authority for the open session: it is
-    // already watching it, and a real reset arrives as a replace frame.
+    // The session on screen is exempt because the stream is already watching
+    // it: every event lands as a frame, so its cache cannot fall behind while
+    // it is open, and a real reset arrives as a replace frame. Nothing here
+    // could tell this page anything the stream has not already told it.
     for (const row of listing.rows) {
       if (row.id === view.current()) continue
       store.invalidateIfAhead(row.id, row.latestSeq)
@@ -243,7 +269,30 @@ router.start(path => {
   // an empty one says so instead of saying "Loading…" about a log that is never
   // going to fill. A session the list has not named yet passes `undefined`,
   // which still reads as loading.
-  if (view.current() !== id) { view.open(id, store.cached(id), chooser.find(id)?.empty); earlier.offer(false) }
+  if (view.current() !== id) {
+    const cache = store.cached(id)
+    view.open(id, cache, chooser.find(id)?.empty)
+    earlier.offer(false)
+    // What this page painted last time, against what the list says the log
+    // actually holds now. Both are the same `event.seq`, so the comparison is
+    // exact rather than a guess.
+    //
+    // A session that moved while the reader was somewhere else got none of its
+    // events: the stream only sends frames for the session in focus, so ten
+    // background sessions never stream into this device. The cursor therefore
+    // stands where the last visit left it while the log has run on ahead, and
+    // asking the server for everything after that cursor returns an increment
+    // the page then refuses, because it is not a replace and not ahead of what
+    // is already painted. That is what left a green row opening onto a frozen
+    // transcript that only a hard reload would shift.
+    //
+    // Rewinding drops the cursor so the focus below asks for the whole tail and
+    // the server answers with a replace, which repaints in one go. The cached
+    // rows stay on screen throughout, so this costs a moment of slightly stale
+    // text rather than a blank screen or a spinner — and a cache that is level
+    // with the log skips it entirely and keeps the cheap increment.
+    if (cache !== undefined && (chooser.find(id)?.latestSeq ?? -1) > cache.renderedThrough) view.rewind()
+  }
   ask.render(id, chooser.find(id)?.asks)
   approval.render(id, chooser.find(id)?.approvals)
   // Open only on the menu URL. Every other session route closes it, which is
@@ -533,6 +582,22 @@ function showWorktreeActions (name) {
   if (known) insertWorktree.textContent = name
 }
 
+// Whether `prompt` is answering without ever showing anything.
+//
+// A browser gives no way to ask this directly, and the obvious proxy — how long
+// the call took — is not safe on its own: a reader who cancels the instant the
+// dialog appears is indistinguishable from a dialog that never appeared, and
+// telling that reader their browser is broken would be worse than saying
+// nothing. So a single fast `null` is treated as an ordinary Cancel.
+//
+// Suppression is inferred only from the shape it actually has: a browser that
+// has latched "prevent additional dialogs" returns `null` instantly EVERY time,
+// so two consecutive instant nulls mean the reader is no longer being asked.
+// The first one stays quiet, the second reports — which is also the press at
+// which a reader would start wondering why nothing is happening.
+const INSTANT_MS = 8
+let instantNulls = 0
+
 // The checkout to write into a prompt, asked for when the page has none.
 //
 // Read from the Insert button's own label whenever it is showing, so what is
@@ -543,14 +608,58 @@ function showWorktreeActions (name) {
 //
 // `null` when the reader cancels, which is not a failure — it is them declining
 // to answer, and the draft they already have is left untouched.
-function worktreeName () {
+function worktreeName (action) {
   if (!insertWorktree.hidden) return insertWorktree.textContent
   const id = view.current()
-  const asked = prompt('Which worktree? This session has not written anything yet,'
-    + ' so its checkout cannot be read from disk.')
-  if (asked === null) return null
+  let asked
+  let refused = false
+  const before = Date.now()
+  try {
+    asked = prompt('Which worktree? This session has not written anything yet,'
+      + ' so its checkout cannot be read from disk.')
+  } catch (error) {
+    // A dialog the browser refused outright. Without this the throw escapes the
+    // click handler and the button looks broken rather than blocked.
+    asked = null
+    refused = true
+  }
+  const instant = Date.now() - before < INSTANT_MS
+  // `null` covers two very different things: the reader pressing Cancel, and the
+  // browser declining to show the dialog at all — a suppressed "prevent
+  // additional dialogs", or a frame without `allow-modals`. The reader's own
+  // Cancel is a quiet outcome and must stay quiet. A dialog that never appeared
+  // has to say so, or the press is indistinguishable from a dead button.
+  if (asked === null) {
+    instantNulls = instant || refused ? instantNulls + 1 : 0
+    // A throw is proof on its own; otherwise it takes a repeat, because one fast
+    // null is far more likely to be a decisive Cancel than a blocked dialog.
+    if (refused || instantNulls >= 2) {
+      errors.show(action + ' needs the worktree name, and this browser is not showing the prompt.',
+        'This session has written nothing yet, so its checkout cannot be read from disk,'
+        + ' and window.prompt() ' + (refused ? 'threw instead of opening a dialog.' : 'returned null immediately, twice, without presenting a dialog.')
+        + '\nThis is usually a suppressed dialog ("prevent this page from creating'
+        + ' additional dialogs"), or a frame without allow-modals.'
+        + '\nWorkaround: reload the page to clear the suppression, or send any message'
+        + ' first so the server can derive the checkout from what the session writes.'
+        + '\nSession: ' + (id ?? 'none')
+        + '\nAt: ' + new Date().toString())
+    }
+    return null
+  }
+  // A dialog that was answered proves dialogs work, so a later fast Cancel
+  // starts from a clean slate rather than inheriting a stale count.
+  instantNulls = 0
   const name = asked.trim()
-  if (name === '') return null
+  // An empty answer is the reader pressing OK on an empty box. Say what did not
+  // happen; returning in silence is the failure this whole branch exists to stop.
+  if (name === '') {
+    errors.show(action + ' needs the worktree name, and none was entered.',
+      'The prompt was answered with an empty value, so there is no checkout name to'
+      + ' write into the draft. The draft has been left untouched.'
+      + '\nSession: ' + (id ?? 'none')
+      + '\nAt: ' + new Date().toString())
+    return null
+  }
   if (id !== null) {
     started.set(id, name)
     // Paint it: the header names the checkout and Insert becomes available, so
@@ -578,14 +687,14 @@ insertWorktree.addEventListener('click', () => {
 })
 
 rebase.addEventListener('click', () => {
-  const name = worktreeName()
+  const name = worktreeName('Rebase')
   if (name === null) return
   replaceDraft('Pull develop, then rebase ' + name
     + ' onto develop, then review develop..' + name)
 })
 
 merge.addEventListener('click', () => {
-  const name = worktreeName()
+  const name = worktreeName('Merge')
   if (name === null) return
   replaceDraft('pull develop, rebase ' + name
     + ' onto develop, then apply all the work of ' + name

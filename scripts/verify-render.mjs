@@ -29,55 +29,56 @@ const browser = await chromium.launch()
 // survives on a desktop viewport is not indentation that survives.
 const page = await browser.newPage({ viewport: { width: 390, height: 844 } })
 
-// --------------------------------------------------------------- collapsing
-// A bare /sessions shows workspaces only: every one starts shut, so the reader
-// meets a short list of projects rather than hundreds of sessions.
+// -------------------------------------------------------------- always open
+// A bare /sessions shows the whole tree. Nothing on this page collapses, so
+// every workspace, every worktree and every session is on screen from the
+// first paint without the reader tapping anything.
 // Never `networkidle`: this page holds an SSE stream open for the life of the
 // session, so it is never idle by design. Wait for the content instead.
 await page.goto(`${origin}/sessions`, { waitUntil: 'domcontentloaded' })
 await page.waitForSelector('#log h2.group', { timeout: 15_000 })
 
-const shut = await page.evaluate(() => ({
+const open = await page.evaluate(() => ({
   workspaces: document.querySelectorAll('#log h2.group').length,
   worktrees: document.querySelectorAll('#log h3.tree').length,
   rows: document.querySelectorAll('#log a.row').length,
-  expanded: [...document.querySelectorAll('#log h2.group .disclose')]
-    .filter(el => el.getAttribute('aria-expanded') === 'true').length,
+  // Whatever is left of the old disclosure must not still be a control: no
+  // button role, no tab stop, no open/shut state for anything to read.
+  controls: document.querySelectorAll(
+    '#log [aria-expanded], #log .disclose[role="button"], #log .disclose[tabindex]').length,
 }))
-check('workspaces render on a bare /sessions', shut.workspaces > 0)
-check('every workspace starts shut', shut.expanded === 0, `${shut.expanded} were open`)
-check('nothing below a workspace shows while shut', shut.worktrees === 0 && shut.rows === 0,
-  `${shut.worktrees} worktrees, ${shut.rows} rows`)
+check('workspaces render on a bare /sessions', open.workspaces > 0)
+check('worktrees show without tapping anything', open.worktrees > 0,
+  `${open.worktrees} worktrees were on screen`)
+check('sessions show without tapping anything', open.rows > 0,
+  `${open.rows} rows were on screen`)
+check('no heading is a disclosure control', open.controls === 0,
+  `${open.controls} element(s) still carried open/shut state`)
 
-// Opening one workspace is a view change, so it has its own URL. This is also
-// the deep link the rest of the checks rely on.
-await page.evaluate(() => {
-  const target = [...document.querySelectorAll('#log h2.group')]
-    .find(el => el.textContent.startsWith('language-boss-and-choc'))
-  target.querySelector('.disclose').click()
-})
-await page.waitForSelector('#log h3.tree', { timeout: 15_000 })
-const opened = await page.evaluate(() => location.search)
-check('opening a workspace changes the URL', opened.includes('open='), `search was "${opened}"`)
-
-// A crowded worktree — more than three siblings and more than two sessions —
-// starts shut so its siblings stay reachable. Its quieter siblings stay open.
-const trees = await page.evaluate(() => [...document.querySelectorAll('#log h3.tree')].map(el => ({
-  // The disclosure's own label. A bare `span` now also matches the copy
-  // button's, and that one is nearer the end of the heading in some browsers'
-  // traversal order — so the title has to be asked for by where it lives.
-  title: (el.querySelector('.disclose span')?.textContent ?? '').trim(),
-  open: el.querySelector('.disclose')?.getAttribute('aria-expanded') === 'true',
-})))
-const crowded = trees.find(t => t.title === 'develop')
-const quiet = trees.find(t => t.title === 'student-error-insights')
-check('a crowded worktree starts shut', crowded !== undefined && !crowded.open,
-  crowded === undefined ? 'develop not found' : 'develop was open')
-check('an uncrowded worktree stays open', quiet !== undefined && quiet.open,
-  quiet === undefined ? 'student-error-insights not found' : 'it was shut')
+// Every worktree is open, including a crowded one — more than three siblings
+// and more than two sessions — which used to start shut.
+const trees = await page.evaluate(() => [...document.querySelectorAll('#log h3.tree')]
+  .map(el => (el.querySelector('.disclose span')?.textContent ?? '').trim()))
+const hasRowsUnder = async title => await page.evaluate(name => {
+  const heading = [...document.querySelectorAll('#log h3.tree')]
+    .find(el => (el.querySelector('.disclose span')?.textContent ?? '').trim() === name)
+  if (heading === undefined) return null
+  // Walk forward to the next heading: whatever lies between is what this
+  // worktree is currently showing.
+  let node = heading.nextElementSibling
+  while (node !== null && !node.matches('h2.group, h3.tree')) {
+    if (node.matches('a.row') || node.querySelector?.('a.row') !== null) return true
+    node = node.nextElementSibling
+  }
+  return false
+}, title)
+check('the crowded worktree is open', trees.includes('develop') && await hasRowsUnder('develop'),
+  'develop showed no sessions')
+check('a quiet worktree is open',
+  trees.includes('student-error-insights') && await hasRowsUnder('student-error-insights'),
+  'student-error-insights showed no sessions')
 
 // ---------------------------------------------------------------- hierarchy
-// Measured with the workspace open, which is the state the hierarchy is visible in.
 
 // The page in document order. A row is matched wherever it sits rather than as
 // a direct child of #log, because a row may be wrapped for layout — the claim
@@ -98,9 +99,9 @@ const shape = await page.evaluate(() => {
       // its tap target still spans the screen, so its box never moves and
       // measuring it would report a hierarchy that is plainly on screen as absent.
       //
-      // A heading's indent belongs to the control inside it rather than to the
-      // heading — the gutter has to be part of the tap target — so the label
-      // itself is measured where there is one, and the box only otherwise.
+      // A heading's indent is carried by the line inside it rather than by the
+      // heading itself, so the label is measured where there is one and the
+      // box only otherwise.
       left: Math.round((() => {
         const label = el.querySelector('.disclose span')
         if (label !== null) return label.getBoundingClientRect().left
@@ -153,17 +154,8 @@ for (const node of shape) {
 check('every session is a leaf under a worktree', orphans === 0,
   `${orphans} row(s) sat directly under a workspace`)
 
-// The remaining claims are about other workspaces, so open every one of them.
-// Each stays shut by default, which is the whole point of the level above.
-await page.evaluate(() => {
-  for (const heading of document.querySelectorAll('#log h2.group')) {
-    if (heading.querySelector('.disclose')?.getAttribute('aria-expanded') === 'false') {
-      heading.querySelector('.disclose').click()
-    }
-  }
-})
-await page.waitForTimeout(400)
-
+// The remaining claims are about other workspaces, which are already on screen:
+// nothing here has to be opened first.
 const all = await page.evaluate(() => {
   const out = []
   for (const el of document.querySelectorAll('#log h2.group, #log h3.tree, #log a.row, #log button.starter')) {

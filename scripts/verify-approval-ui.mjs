@@ -17,9 +17,9 @@
 // is a limit of the mock, not of the GUI, and picking the one that works keeps
 // this script a check on the GUI rather than on the fixture.
 //
-// The list block opens its workspace with `?open=`: `/sessions` starts every
-// workspace shut by design, so the row is not in the DOM on a bare load and a
-// presence check without it would fail on a healthy page.
+// The list block loads a bare `/sessions`: nothing on that page collapses, so
+// every row is in the DOM from the first paint and a presence check needs no
+// setup to reach one.
 
 import { chromium } from '/usr/lib/node_modules/playwright/index.mjs'
 
@@ -58,7 +58,7 @@ async function cold () {
 //  and every later block settles one.
 {
   const { context, page, errors } = await cold()
-  await page.goto(`${origin}/sessions?open=ws-infra`, { waitUntil: 'domcontentloaded' })
+  await page.goto(`${origin}/sessions`, { waitUntil: 'domcontentloaded' })
   await page.waitForSelector('#log h2.group', { timeout: 15_000 })
   // The row for the session waiting on a permission must carry the "asking"
   // mark, exactly as a session waiting on a question does. The mark's accessible

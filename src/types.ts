@@ -236,6 +236,50 @@ export interface PendingAsk {
    * ancestor's own question.
    */
   readonly from?: string
+  /**
+   * The id of the child named by {@link from}, so the form can link to it.
+   *
+   * A hidden subagent is left off the listing but its transcript stays readable
+   * at its own `/s/<id>` URL, and that transcript is the *only* durable record
+   * of a carried question: the parent's log never receives the child's ask, its
+   * preface or its answer. Naming the child in prose alone therefore pointed at
+   * a record with no way to reach it, and the moment the question was answered
+   * the carried ask disappeared and took the whole exchange off the screen with
+   * it.
+   *
+   * Carrying the id turns that dead end into a deep link, which is what keeps
+   * the exchange reachable after it stops being pending. Absent for a session's
+   * own question, exactly like {@link from}.
+   */
+  readonly fromId?: string
+  /**
+   * What the agent said in the same breath as asking, when it said anything.
+   *
+   * A model writes its reasoning as ordinary text and then calls the ask tool,
+   * and both land in **one** `assistant/message`. The host's
+   * `question/requested` frame carries only the questions, so a form built from
+   * that frame alone drops the half of the message that makes it answerable: a
+   * question opening "Given that" names a "that" the reader was never shown.
+   *
+   * Empty when the call carried no text, which is common and is not a failure —
+   * a self-contained question needs no preface, and inventing one would be
+   * worse than the absence.
+   *
+   * This is presentation, never identity: the answer names {@link askId} alone,
+   * so a preface that could not be found costs context and never the ability to
+   * answer.
+   *
+   * Carried as **serialized HTML**, not as the raw source. A model writes this
+   * half of the message in the same markdown it writes every other half in — a
+   * list of the options it is weighing, a `code` span naming the field it is
+   * asking about, a bold word carrying the contrast the question turns on — and
+   * shown as plain text that markup degrades into punctuation noise sitting
+   * between the reader and the thing they must decide. It goes through the same
+   * `markdown` → `serializeAll` path the transcript uses, so it is safe for the
+   * same structural reason: {@link Node} has no script, style, or
+   * attribute-bearing variant, so nothing expressible here needs sanitizing.
+   */
+  readonly prefaceHtml?: string
 }
 
 /**

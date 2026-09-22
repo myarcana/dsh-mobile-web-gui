@@ -38,25 +38,9 @@ const page = await browser.newPage({ viewport: { width: 390, height: 844 } })
 await page.goto(`${origin}/sessions`, { waitUntil: 'domcontentloaded' })
 await page.waitForSelector('#log h2.group', { timeout: 15_000 })
 
-// Open every shut group, workspaces first so the worktrees under them exist to
-// be opened in turn.
-//
-// Re-queried every iteration rather than held: each toggle rewrites the URL and
-// repaints the whole list, so a handle taken before the tap is detached by the
-// time the next one is wanted. The loop is bounded because a tap that fails to
-// open its group would otherwise spin forever.
-async function openAll(selector, limit) {
-  for (let i = 0; i < limit; i++) {
-    const shut = await page.$(`${selector} .disclose[aria-expanded="false"]`)
-    if (shut === null) return
-    await shut.click().catch(() => {})
-    await page.waitForTimeout(80)
-  }
-}
-
-await openAll('#log h2.group', 40)
+// Nothing has to be opened first: this list does not collapse, so every
+// worktree and every session is painted on arrival.
 await page.waitForSelector('#log h3.tree', { timeout: 15_000 })
-await openAll('#log h3.tree', 80)
 
 // ------------------------------------------------- the starter is first
 // Read the painted list as a flat sequence, so "first item under a heading" is
@@ -384,43 +368,47 @@ await page.waitForTimeout(80)
 check('no worktree name is ever hidden while its copy icon stays visible',
   hidden.length === 0, hidden.slice(0, 4).join('; '))
 
-// ------------------------------------------------- the heading is still a control
-// The disclosure is a container carrying the button role rather than a
-// <button>, so the copy mark can sit inside its text flow. Everything the
-// element type used to provide has to still be there.
+// ------------------------------------------------- the heading is not a control
+// The heading names its worktree and nothing more: there is nothing to open, so
+// it must not pose as a control. A screen reader announcing a button here, or a
+// tab stop that does nothing when pressed, would promise an action that no
+// longer exists. The element itself stays, because the copy mark sits inside
+// its text flow.
 const control = await page.evaluate(() => {
   const el = document.querySelector('#log h3.tree .disclose')
   if (el === null) return null
   return {
-    role: el.getAttribute('role') ?? '',
-    tabIndex: el.tabIndex,
+    role: el.getAttribute('role'),
+    hasTabStop: el.hasAttribute('tabindex'),
     expanded: el.getAttribute('aria-expanded'),
-    // The mark copies the name, so it must live inside the same control.
+    // The mark copies the name, so it must still live beside the name.
     holdsCopy: el.querySelector('button.copy') !== null,
   }
 })
-check('the worktree heading is still announced as a control',
-  control !== null && control.role === 'button' && control.tabIndex === 0
-    && (control.expanded === 'true' || control.expanded === 'false'),
+check('the worktree heading is not announced as a control',
+  control !== null && control.role === null && !control.hasTabStop
+    && control.expanded === null,
   JSON.stringify(control))
 check('the copy mark sits inside the name it copies',
   control !== null && control.holdsCopy,
-  'the mark is outside the control holding the name')
+  'the mark is outside the element holding the name')
 
-// Enter and Space must open a heading, and Space must not also scroll.
-const keys = await page.evaluate(async () => {
+// Tapping a heading does nothing at all: it does not navigate, and it does not
+// change what is on screen.
+const inert = await page.evaluate(async () => {
   const el = document.querySelector('#log h3.tree .disclose')
   if (el === null) return null
-  const was = el.getAttribute('aria-expanded')
-  el.focus()
-  const focused = document.activeElement === el
-  el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+  const url = location.href
+  const before = document.querySelectorAll('#log a.row').length
+  el.click()
   await new Promise(resolve => setTimeout(resolve, 250))
-  const now = document.querySelector('#log h3.tree .disclose')?.getAttribute('aria-expanded')
-  return { focused, changed: was !== now }
+  return {
+    sameUrl: location.href === url,
+    sameRows: document.querySelectorAll('#log a.row').length === before,
+  }
 })
-check('a worktree heading takes focus and answers Enter',
-  keys !== null && keys.focused && keys.changed, JSON.stringify(keys))
+check('tapping a worktree heading changes nothing',
+  inert !== null && inert.sameUrl && inert.sameRows, JSON.stringify(inert))
 
 // ------------------------------------------------- the pre-fill
 // Tap the first starter under a *named* worktree and follow it to the session.

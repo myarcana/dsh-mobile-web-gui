@@ -282,6 +282,30 @@ function say (s, text) {
   add(s, 'assistant/message', { turn: s.turn, step: 0, message: { role: 'assistant', content: [{ type: 'text', text }] }, stream: [] })
 }
 
+
+// An ask call and the words it was asked with, in one assistant message.
+//
+// This is the shape a real model produces — reasoning as text, the question as a
+// tool call, both in the same message — and it is the only shape the preface
+// join recognises, so a fixture that wants a preface has to use it.
+function asked (s, questions, text) {
+  const callId = 'call-' + s.events.length
+  add(s, 'assistant/message', {
+    turn: s.turn,
+    step: 0,
+    message: {
+      role: 'assistant',
+      content: [
+        { type: 'text', text },
+        { type: 'tool-call', id: callId, name: 'ask_user_question', arguments: JSON.stringify({ questions }) }
+      ]
+    },
+    stream: []
+  })
+  add(s, 'tool/call', { turn: s.turn, step: 0, callId, name: 'ask_user_question', arguments: JSON.stringify({ questions }) })
+  return callId
+}
+
 function call (s, name, args) {
   const callId = 'call-' + s.events.length
   add(s, 'tool/call', { turn: s.turn, step: 0, callId, name, arguments: JSON.stringify(args) })
@@ -520,12 +544,27 @@ const audit = session('audit-drift', 'Audit drift', '/home/dev/infra', {
   parentSession: 'migration'
 })
 user(audit, 'Audit the drift between the schema and the handlers.')
-hub.questions.hold('mock-ask-child', 'audit-drift', [{
+// The question deliberately opens with "Given that" and refers back to reasoning
+// that exists only in the preface, because that is the shape which made the
+// preface load-bearing rather than decorative: without it this question cannot
+// be answered at all. Every fixture question used to be self-contained, so a
+// preface dropped anywhere between the fold and the form looked exactly like a
+// preface that was never sent, and no browser check could tell the difference.
+const auditQuestions = [{
   id: 'scope',
   header: 'Scope',
-  question: 'Which modules should the audit cover?',
+  question: 'Given that, which modules should the audit cover?',
   options: [{ label: 'All of them' }, { label: 'Just the auth surface' }]
-}])
+}]
+// The preface and the ask call must land in ONE assistant message, because that
+// adjacency is the whole join: `notePreface` credits a message's text to the ask
+// calls in that same message, and `withPrefaces` then pairs the live ask against
+// the log's unanswered ask calls. A `say` followed by a separate call would look
+// right in the fixture and still produce no preface at all.
+asked(audit, auditQuestions,
+  'The handlers accept `legacy_id` while the schema only declares `id`, so every'
+  + ' write through the old path is silently discarded rather than rejected.')
+hub.questions.hold('mock-ask-child', 'audit-drift', auditQuestions)
 hub.questions.holdApproval('mock-approval-child', 'audit-drift', {
   askId: 'mock-approval-child',
   toolName: 'bash',
@@ -761,6 +800,116 @@ if (process.env.LONG === '1') {
     }
     say(buried, 'Finished buried prompt number ' + n + '.')
   }
+
+  // A session whose newest message is followed by more than a viewport of work.
+  //
+  // This is the ordinary shape of a session someone comes back to: the agent
+  // answered, then carried on working, and what has happened since is worth
+  // more than a screenful. Every other long fixture here ends on a message, so
+  // its newest message sits within a viewport of the document end and can only
+  // ever land at the bottom — the fallback. This one is the case the rule was
+  // actually written for, where the message can reach the top of the screen and
+  // the work it produced runs on below it.
+  //
+  // Getting that height takes some care, because most of what fills a real tail
+  // does not survive to occupy space. A run of consecutive tool rows folds into
+  // a single 45px line, and assistant narration between two calls is absorbed
+  // into the run rather than breaking it, so thirty reads and their commentary
+  // collapse to one row and leave the newest message a couple of hundred pixels
+  // off the end — the fallback again. A subagent report does break a run, but
+  // it is itself a message, so a tail made of those just moves the anchor down
+  // to the last one.
+  //
+  // Answered questions are the one thing that is neither: `asked` rows are
+  // deliberately never folded, because a question put to the reader has to stay
+  // legible in the scrollback forever, and they are not messages, so they never
+  // become the anchor. A tail of them therefore keeps its height and leaves the
+  // final message where it is.
+  const working = session('still-working', 'Still working', FIXTURES + 'dsh-mobile-web-gui')
+  owns('ws-dmwg', 'still-working')
+  for (let n = 0; n < 40; n += 1) {
+    user(working, 'Working prompt number ' + n + '.')
+    say(working, 'Answer number ' + n + ', the one the reader is brought back to.')
+    for (let step = 0; step < 6; step += 1) {
+      const id = call(working, 'read', { file: '/src/working-' + n + '-' + step + '.ts' })
+      result(working, id, 'Contents of working module ' + n + '-' + step + '.')
+    }
+  }
+  // The stretch of work after the final message, tall enough that the message
+  // above it can sit at the top of the screen with room to scroll further.
+  //
+  for (let n = 0; n < 8; n += 1) {
+    const askId = call(working, 'ask_user_question', {
+      questions: [{
+        id: 'working-' + n,
+        question: 'Which way should the follow-up work on module ' + n + ' go?',
+        options: [{ label: 'The first way' }, { label: 'The second way' }]
+      }]
+    })
+    result(working, askId, JSON.stringify({
+      answers: [{ id: 'working-' + n, selected: ['The first way'] }]
+    }), false)
+  }
+
+  // A long session that is *waiting on the reader*. The question outranks the
+  // newest message as the anchor, and this is the fixture that can tell the two
+  // apart: the transcript runs on well past its last message, so anchoring on
+  // that message and anchoring on the form land hundreds of pixels apart rather
+  // than both falling into the document-bottom clamp.
+  const waiting = session('waiting-on-you', 'Waiting on you', FIXTURES + 'dsh-mobile-web-gui')
+  owns('ws-dmwg', 'waiting-on-you')
+  // Writes inside a real checkout, so the server can actually place this session
+  // and the header gains its worktree line. That line is the point: it arrives
+  // with the session list, *after* the transcript, and un-hiding it grows the
+  // sticky header — which is exactly the late reflow that used to bury the row
+  // this anchored on. A session the server cannot place reports `wt:unknown`,
+  // the line stays hidden, the header never grows, and the regression is
+  // invisible to every check.
+  for (let n = 0; n < 2; n += 1) {
+    result(waiting, call(waiting, 'edit', { file_path: FIXTURES + 'dsh-mobile-web-gui/main/src/waiting' + n + '.ts' }), 'Replaced 1 occurrence', false)
+  }
+  for (let n = 0; n < 40; n += 1) {
+    user(waiting, 'Waiting prompt number ' + n + '.')
+    say(waiting, 'Answer number ' + n + ' while the work was still going.')
+    for (let step = 0; step < 6; step += 1) {
+      const id = call(waiting, 'read', { file: '/src/waiting-' + n + '-' + step + '.ts' })
+      result(waiting, id, 'Contents of waiting module ' + n + '-' + step + '.')
+    }
+  }
+  // Unfoldable height after the last message, for the same reason `still-working`
+  // uses answered questions: a folded run of tool rows would collapse and leave
+  // the message within a viewport of the end, where the clamp hides the bug.
+  for (let n = 0; n < 8; n += 1) {
+    const askId = call(waiting, 'ask_user_question', {
+      questions: [{
+        id: 'settled-' + n,
+        question: 'Which way should settled item ' + n + ' go?',
+        options: [{ label: 'The first way' }, { label: 'The second way' }]
+      }]
+    })
+    result(waiting, askId, JSON.stringify({
+      answers: [{ id: 'settled-' + n, selected: ['The first way'] }]
+    }), false)
+  }
+  // The live one, held open: this is what the reader opened the session to answer.
+  //
+  // Deliberately several questions, so the form is taller than the viewport.
+  // A one-question form is short enough that it always falls inside the
+  // document-bottom clamp, where anchoring on the form and anchoring on the
+  // newest message land in the same place and neither can be told from the
+  // other. A tall form is the only shape that distinguishes them.
+  const waitingQuestions = []
+  for (let n = 0; n < 6; n += 1) {
+    waitingQuestions.push({
+      id: 'direction-' + n,
+      header: 'Direction ' + n,
+      question: 'Given all of that, which way should remaining item ' + n + ' go?',
+      options: [{ label: 'Finish the migration' }, { label: 'Roll it back' }]
+    })
+  }
+  asked(waiting, waitingQuestions,
+    'Both remaining paths touch the same tables, so this one cannot be deferred.')
+  hub.questions.hold('mock-ask-waiting', 'waiting-on-you', waitingQuestions)
 }
 
 const assets = await loadAssets(fileURLToPath(new URL('../client', import.meta.url)))

@@ -41,13 +41,9 @@ page.on('pageerror', error => errors.push(String(error)))
 const offset = () => page.evaluate(() => document.scrollingElement.scrollTop)
 const height = () => page.evaluate(() => document.scrollingElement.scrollHeight)
 
-// A list long enough to have somewhere to scroll to. Which groups are open
-// lives in the URL, so every workspace is asked for open by id — the ids come
-// from the running server rather than a fixture name, so this works against
-// whatever box it is pointed at.
-const listing = await (await fetch(`${origin}/api/sessions`)).json()
-const open = listing.groups.map(group => group.id).join(' ')
-await page.goto(`${origin}/sessions?open=${encodeURIComponent(open)}`, { waitUntil: 'domcontentloaded' })
+// A list long enough to have somewhere to scroll to, which a bare `/sessions`
+// already is: nothing on it collapses, so the whole corpus is painted at once.
+await page.goto(`${origin}/sessions`, { waitUntil: 'domcontentloaded' })
 const link = page.locator('#log a[href^="/s/"]').first()
 try {
   await link.waitFor({ timeout: 20000 })
@@ -93,10 +89,31 @@ if (href === null) { await browser.close(); process.exit(1) }
 await page.locator(`#log a[href="${href}"]`).first().click()
 await page.waitForSelector('#log article', { timeout: 20000 })
 check('the tap opened a session', new URL(page.url()).pathname === href, `${page.url()} vs ${href}`)
-// Forward navigation still belongs at the top: this is the behaviour
-// verify-open-at-top.mjs owns, restated here so a fix for Back cannot quietly
-// trade one for the other.
-check('the opened session is at the top', await offset() < 4, `scrollTop ${Math.round(await offset())}`)
+// A forward tap must never inherit the list's offset: the reader left the list
+// 600px down, and the session they opened has to be positioned on its own
+// terms. Where that is belongs to verify-open-at-top.mjs — the top of the
+// newest message, or the document bottom when that message is too near the end
+// to reach the top — and deliberately is not restated here, because a check
+// that pins the exact position in two files makes the rule impossible to change
+// in one. What this file owns is only the part a fix for Back could quietly
+// trade away: that the number is the session's own, not the one carried in from
+// the list.
+//
+// Measured once the transition has settled. The router pins the outgoing list's
+// height onto the body across the swap and releases it when the new screen can
+// stand on its own, so a sample taken before that reads the offset against the
+// *list's* height rather than the session's.
+{
+  await page.waitForFunction(() => document.body.style.minHeight === '', null, { timeout: 5000 })
+    .catch(() => {})
+  await page.waitForTimeout(200)
+  const landed = await offset()
+  const max = await page.evaluate(() =>
+    document.scrollingElement.scrollHeight - document.scrollingElement.clientHeight)
+  check('the opened session is not left at the list\'s offset',
+    Math.abs(landed - left) > 40,
+    `scrollTop ${Math.round(landed)}, came from ${Math.round(left)}, of a possible ${Math.round(max)}`)
+}
 
 // What the outgoing entry actually carries. This is the assertion that speaks
 // for Firefox, and the reason the rest of this file is not enough on its own:

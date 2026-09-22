@@ -506,8 +506,14 @@ pre {
   padding: 10px;
   background: var(--sunk);
   border-radius: 6px;
-  /* The one sanctioned inner scroller: code must not widen the document. */
-  overflow-x: auto;
+  /* Code wraps rather than scrolling sideways. A long line is read by letting
+     it fall onto the next line, not by dragging a band under the finger: a
+     phone has no comfortable sideways gesture, and a hidden tail reads as
+     absent. `pre-wrap` keeps the authored newlines and indentation that make
+     code code. A long unbroken token — a path, a hash, a URL — breaks
+     mid-token on the body's `overflow-wrap: anywhere` rather than pushing the
+     box past the viewport. */
+  white-space: pre-wrap;
 }
 
 code { font-family: ui-monospace, monospace; font-size: 14px; }
@@ -531,9 +537,10 @@ article h4, article h5, article h6 { color: var(--dim); }
 del { color: var(--dim); }
 hr { margin: 12px 0; border: 0; border-top: 1px solid var(--line); }
 
-/* A table is the second sanctioned inner scroller, for the same reason `pre` is
-   the first: a wide table must scroll within its own band rather than widen the
-   document and put every message on a horizontal scrollbar. */
+/* The one sanctioned inner scroller. Code above wraps instead, but a table
+   cannot: its columns must stay aligned across rows, so a wide one has nowhere
+   to reflow to. It scrolls within its own band rather than widening the
+   document and putting every message on a horizontal scrollbar. */
 .tablewrap { margin: 8px 0; overflow-x: auto; }
 
 table { border-collapse: collapse; width: 100%; }
@@ -580,6 +587,10 @@ article li .pick { margin: 0 6px 0 0; vertical-align: baseline; }
   top: 0;
   z-index: 1;
   margin: 0;
+  /* The heading's own breathing room. It used to come from the 44px tap-target
+     floor on the control inside it; with nothing to tap, the heading sets the
+     space it wants directly. */
+  padding: 10px 0;
   background: var(--paper);
   border-bottom: 1px solid var(--line);
   color: var(--ink);
@@ -638,11 +649,9 @@ article li .pick { margin: 0 6px 0 0; vertical-align: baseline; }
   background-size: var(--hair) 100%;
 }
 
-/* Only a worktree with sessions showing gets that stub. A shut one has nothing
-   on screen to join, and an open but empty one is answered by its own "No
-   sessions yet." — neither has a leaf below for the line to reach, and a line
-   reaching nothing is the floating stub this stanza exists to remove. */
-.tree:has(.disclose[aria-expanded="false"]),
+/* Only a worktree with something under it gets that stub. An empty one is
+   answered by its own "No sessions yet." and has no leaf below for the line to
+   reach, and a line reaching nothing is the floating stub this rule removes. */
 .tree:not(:has(+ .rowline, + .row, + .starter)) { background-image: none; }
 
 /* The elbow that joins a worktree to its workspace: a stub of the trunk down to
@@ -687,52 +696,33 @@ article li .pick { margin: 0 6px 0 0; vertical-align: baseline; }
 
 .tree[data-last]::after { display: none; }
 
-/* The heading's control. Fills its heading so the whole bar is the tap target,
-   and inherits the type so the button is invisible as a button — the caret and
-   the count are what say it opens. */
+/* The heading's line: the name, and whatever the heading says about what is
+   under it. Laid out as a row so the name and the count sit on one baseline. */
 .disclose {
   display: flex;
   align-items: center;
   gap: 8px;
   width: 100%;
-  min-height: 44px;
-  padding: 0;
-  border: 0;
-  background: none;
   color: inherit;
   font: inherit;
   text-align: left;
-  /* Kills the double-tap-zoom delay without taking the scroll gesture. */
-  touch-action: manipulation;
 }
 
-/* The worktree heading's indent and the space above it, carried by the control
-   rather than by the heading, so both are part of the tap target. A press
-   anywhere in the band — including the tree gutter beside the title — opens
-   the worktree, instead of a 22px strip down the left doing nothing. */
+/* The worktree heading's indent and the space above it. */
 .tree .disclose {
   /* The indent is padding plus a hanging indent: the padding sets where the
      block starts, and the negative text-indent pulls only the FIRST line back
-     out to make room for the caret drawn in ::before. Every later line of a
-     wrapped name therefore keeps the full indent instead of falling back to the
-     block's edge, which is what made a second line sit further left than the
-     first and break out of the worktree's column. */
-  padding: var(--gap) 0 0 calc(var(--step) + 1em + 8px);
-  text-indent: calc((1em + 8px) * -1);
-  /* The padding above is inside the button now, so the floor has to clear it
-     or a short heading's target shrinks back below the minimum. */
-  min-height: calc(44px + var(--gap));
-  /* Text, not a flex row. The copy mark lives inside this element now, and it
-     has to flow after the last word of the name the way a footnote mark does —
+     out. Every later line of a wrapped name therefore keeps the full indent
+     instead of falling back to the block's edge, which is what made a second
+     line sit further left than the first and break out of its column. */
+  padding: var(--gap) 0 0 var(--step);
+  /* Text, not a flex row. The copy mark lives inside this element, and it has
+     to flow after the last word of the name the way a footnote mark does —
      which only happens if the contents are laid out as text. As flex children
      the name and the mark were each a block, and the mark aligned against the
      name's full-width box rather than against the line its words ended on. */
   display: block;
 }
-
-/* The caret is drawn by ::before, which is now in the text flow rather than a
-   flex child; this restores the gap the flex `gap` was providing. */
-.tree .disclose::before { margin-right: 8px; }
 
 /* The name is inline text, so its last line ends where its last word does and
    the mark that copies it follows immediately. */
@@ -746,23 +736,6 @@ article li .pick { margin: 0 6px 0 0; vertical-align: baseline; }
    be split holds the two together: if the mark does not fit, the fragment it is
    bound to moves down with it. */
 .tree .disclose .copy { margin-left: 4px; }
-
-/* The caret, which is the whole of the open/shut affordance. Drawn from the
-   state the button already publishes, so the two cannot disagree. */
-.disclose::before {
-  content: "›";
-  flex: none;
-  width: 1em;
-  color: var(--dim);
-  font-size: 15px;
-  transition: transform 120ms ease;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .disclose::before { transition: none; }
-}
-
-.disclose[aria-expanded="true"]::before { transform: rotate(90deg); }
 
 /* The title, which is the part allowed to run out of room. It wraps rather
    than truncating: a folder name is how the reader tells one workspace from
@@ -1057,22 +1030,9 @@ article li .pick { margin: 0 6px 0 0; vertical-align: baseline; }
    last word and the mark that copies it. */
 .tree .copy { margin-left: 4px; }
 
-/* The disclosure keeps the width it had, so the tree lines drawn against the
-   heading do not move when a copy button joins the row. */
-/* Only as wide as its own content, so the copy button sits directly after the
-   name rather than being pushed to the far edge of the screen — a control an
-   inch away from the thing it acts on reads as belonging to the row below it.
-   It still shrinks, so a long name truncates instead of crowding the button
-   off the end. */
-/* A worktree heading is a row: the disclosure, then the copy button. The
-   disclosure keeps the full width it has at the workspace level, because the
-   copy button is placed *inside* that flow — right after the name — rather than
-   after the count at the far edge. See `.tree .disclose .copy` below. */
-.tree .disclose { flex: 0 1 auto; width: auto; min-width: 0; }
-
 /* The count is pushed to the end of the row, away from the name and the copy
    button that belong together. It sits in the heading rather than in the
-   disclosure so this is a plain sibling order rather than a nested override. */
+   line so this is a plain sibling order rather than a nested override. */
 .tree .count {
   /* Follows the name and its copy mark in the same text flow, dropping to the
      next line by itself when the row is full — which is right: the tally is the
@@ -1268,10 +1228,40 @@ article li .pick { margin: 0 6px 0 0; vertical-align: baseline; }
   border-radius: 6px;
   background: var(--sunk);
   font-size: 13px;
+  /* Wraps rather than scrolling: the full technical detail has to be readable
+     and copyable in one sweep, and a tail hidden off the right edge is neither. */
   white-space: pre-wrap;
   /* Selectable so it can be copied straight to a developer. */
   user-select: text;
-  overflow-x: auto;
+}
+
+/* The detail carries the text shape; the box around it carries the frame, so
+   the dismiss button can sit inside the same border without indenting the
+   technical detail a reader copies out. */
+.error > pre {
+  margin: 0;
+  font-size: inherit;
+  white-space: inherit;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+/* Floated rather than flexed so the detail wraps around it on a narrow screen
+   instead of being squeezed into a column beside it. */
+.error > .dismiss {
+  float: right;
+  /* Clears the box's own padding so the 44px target reaches the corner. */
+  margin: -10px -10px 0 8px;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: #c00;
+  font: inherit;
+  font-size: 13px;
+  touch-action: manipulation;
 }
 
 /* display:flex would otherwise beat the browser's own [hidden] rule. */
@@ -1430,6 +1420,19 @@ article li .pick { margin: 0 6px 0 0; vertical-align: baseline; }
 .question { font-weight: 600; }
 .from { color: var(--dim); font-size: 13px; }
 .detail { white-space: pre-wrap; }
+/* What the agent said as it asked. Ordinary prose rather than emphasis: the
+   question below it is the thing being answered, so this must read as the
+   context leading to it and never compete with it.
+
+   It is rendered markdown, exactly like a transcript message, so it takes the
+   same two whitespace rules `article` takes and for the same reasons: authored
+   newlines inside a paragraph are content, and a list item's marker and text
+   must stay on one line. The margin guards keep the block flush with the
+   question below it. */
+.preface p { white-space: pre-wrap; }
+.preface li { white-space: normal; }
+.preface > :first-child { margin-top: 0; }
+.preface > :last-child { margin-bottom: 0; }
 
 /* Press feedback is applied by script after a deliberate hold. There is no
    :active rule anywhere: on mobile it fires during scrolling. */

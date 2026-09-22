@@ -9,11 +9,27 @@ export function mount (element) {
 }
 
 // Show one failure with everything needed to diagnose it.
+//
+// Dismissable, because these accumulate: a flaky connection can stack up a
+// screenful of the same failed request, and a reader who has copied one out (or
+// simply reconnected) needs the page back. Closing is the only thing the button
+// does — nothing is retried and nothing is reported — so a failure never leaves
+// the page on its own, only when someone says so.
 export function show (summary, detail) {
   if (host === null) return
-  const block = document.createElement('pre')
+  const block = document.createElement('section')
   block.className = 'error'
-  block.textContent = summary + '\n\n' + detail
+  const close = document.createElement('button')
+  close.type = 'button'
+  close.className = 'dismiss'
+  close.textContent = 'Dismiss'
+  // Names what goes away, so with several stacked failures it is clear which
+  // one this button closes.
+  close.title = 'Dismiss: ' + summary
+  close.addEventListener('click', () => block.remove())
+  const text = document.createElement('pre')
+  text.textContent = summary + '\n\n' + detail
+  block.append(close, text)
   host.append(block)
 }
 

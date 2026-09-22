@@ -43,14 +43,30 @@ let boundFor = null
 // behind the window it painted, so the link disappears exactly at the first
 // message rather than after a wasted request that comes back empty.
 //
-// `from` is the seq the next backwards read starts at, as the server reported it
-// for that same window. Every caller reaches here having painted the log
-// wholesale — opening a session, or a whole-tail read landing — and a replace
-// throws away any history already prepended, so the bound is restated on every
-// call rather than carried over.
+// `from` is the seq the next backwards read starts at, as the server reported
+// it for that same window. It is adopted only when it reaches further back than
+// the walk has already read, because the walk's progress outlives the paint.
+//
+// This used to restate the bound on every call, on the reasoning that a replace
+// throws away any history already prepended. That stopped being true: a replace
+// repaints from `transcript`, which deliberately excludes prepended history, so
+// the rows go but the reader has already read them. Restating then moved the
+// bound *backwards* — a reader who had walked to seq 1200 had it reset to the
+// tail window's edge at ~1900 by the next reconnect or resumed stream, and the
+// following tap re-requested the 1200..1900 range they already had. That is
+// where the duplicated scrollback rows came from: not a rendering fault, but
+// history being fetched twice and folded into a second run line beside the
+// first. A monotonic bound cannot ask for the same range twice.
 export function offer (more, from) {
-  boundFor = view.current()
-  bound = typeof from === 'number' && Number.isFinite(from) ? from : view.from()
+  // A different session is a different walk; nothing about the old one carries.
+  // Checked before the bound is touched, because switching sessions routinely
+  // arrives here as `offer(false)` with no bound at all.
+  const id = view.current()
+  if (id !== boundFor) { boundFor = id; bound = -1 }
+  const restated = typeof from === 'number' && Number.isFinite(from) ? from : view.from()
+  // Only ever further back. `-1` means "nothing known", which is why the first
+  // bound for a session is adopted whatever it says.
+  if (bound < 0 || (restated >= 0 && restated < bound)) bound = restated
   if (!more) return retire()
   // Move the existing link back to the top: a repaint replaces the log's
   // contents wholesale, so the node has to be put back after one.

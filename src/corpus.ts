@@ -24,7 +24,9 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
 import type { SessionRecord } from '@deepseek-ai/dsh-session-query'
 import type { Workspace } from '@deepseek-ai/dsh-workspace'
-import { answerIndex, renderEvent, settledAsks } from './render.ts'
+import { markdown } from './markdown.ts'
+import { ASK_TOOL, answerIndex, renderEvent, settledAsks } from './render.ts'
+import { serializeAll } from './serialize.ts'
 import { UNKNOWN_WORKTREE } from './types.ts'
 import type { PendingApproval, PendingAsk, SessionListing, SessionSummary, WorkspaceGroup, WorktreeGroup } from './types.ts'
 import { identify, label, worktreesIn } from './worktree.ts'
@@ -124,6 +126,44 @@ interface Derived {
    * one worktree forty times and glanced at another once is not a close call.
    */
   readonly writes: ReadonlyMap<string, number>
+  /**
+   * The text an `ask_user_question` call was accompanied by, keyed by its `callId`.
+   *
+   * A model's reasoning and its ask tool call arrive in one `assistant/message`,
+   * but the host's live `question/requested` frame carries only the questions.
+   * Capturing the pairing here — during a fold this log already pays for — is
+   * what lets a waiting form show the sentences that give it its subject.
+   *
+   * Bounded two ways, because this is held for every session on the box: only
+   * asks are recorded (not the text beside every tool call), and each entry is
+   * clipped to {@link PREFACE_MAX}.
+   */
+  readonly prefaces: ReadonlyMap<string, string>
+  /**
+   * Ask calls in this log with no result yet, oldest first, and what each said.
+   *
+   * The join between a *waiting* question and its text, and it exists because
+   * the two halves are in different id spaces with nothing on the wire linking
+   * them: the host announces a question under its own `rpcId`
+   * (`06229d16-…`) while the log records the call under the model's `callId`
+   * (`toolu_013dq…`). Neither appears in the other's record.
+   *
+   * What does hold is a structural fact: a question is waiting exactly while
+   * its call has no `tool/result`, and the tool writes that result the instant
+   * an answer reaches it. So the unanswered ask calls in a log are precisely the
+   * questions the host is waiting on, in the same order — which is enough to
+   * pair them without either side inventing an id. The question ids are carried
+   * too, so the pairing is *checked* rather than assumed.
+   */
+  readonly waitingAsks: readonly WaitingAsk[]
+}
+
+/** One ask call in a log that has no result yet, and the text beside it. */
+interface WaitingAsk {
+  /** The question ids this call put, so a pairing can be verified rather than trusted. */
+  readonly ids: readonly string[]
+  /** What the agent said in the same message, or `''` when it said nothing. */
+  readonly preface: string
 }
 
 /**
@@ -164,9 +204,18 @@ interface Rooted {
   readonly root: string
 }
 
+/**
+ * How much of an ask's accompanying text is kept.
+ *
+ * Generous enough for the several sentences of reasoning that normally precede
+ * a question, and bounded so a model that narrates at length cannot grow this
+ * map without limit — it is held for every session with a waiting ask.
+ */
+const PREFACE_MAX = 4_000
+
 /** A row with nothing derived yet, which is a real state rather than a failure. */
 function underived(header: SessionHeader): Derived {
-  return { title: '', lastLine: '', empty: false, time: header.createdAt, seq: -1, opening: '', writes: new Map() }
+  return { title: '', lastLine: '', empty: false, time: header.createdAt, seq: -1, opening: '', writes: new Map(), prefaces: new Map(), waitingAsks: [] }
 }
 
 /** One row's content, and how much of its log that content already covers. */
@@ -346,7 +395,8 @@ export class Corpus {
     for (const record of visible) {
       const id = record.header.id
       const group = bySession.get(id) ?? this.fallback(record.header)
-      const derived = this.folded.get(id)?.derived ?? underived(record.header)
+      const fold = this.folded.get(id)
+      const derived = fold?.derived ?? underived(record.header)
       const agent = this.ctx.agents.get(id)
       const tree = trees.get(id)
       rows.push({
@@ -360,7 +410,17 @@ export class Corpus {
         // the reader is already looking at rather than the session.
         title: derived.title !== '' ? derived.title : (nameFromPrompt(derived.opening) || 'New session'),
         running: agent?.status === 'running',
-        latestSeq: derived.seq,
+        // The last seq in the log, not the last one folded. Both are the same
+        // `event.seq` the stream sends and the page stores as `renderedThrough`
+        // — there is one sequence here — but `derived.seq` only moves when the
+        // fold runs, which is a window behind the events themselves. Shipping
+        // the delayed number made every live session look like its cached
+        // transcript was ahead of the log, so the page could not tell a stale
+        // cache from a normal race and stopped checking the open session at all.
+        // That is what left a session's transcript frozen while its row went
+        // green. `lastSeq` is exact and already computed, so the page can
+        // compare it against what it has painted and be right.
+        latestSeq: fold?.lastSeq ?? derived.seq,
         workspace: group.title,
         workspaceId: group.id,
         workspaceOrder: group.order,
@@ -385,7 +445,9 @@ export class Corpus {
         // Read live, never folded into the cached shape: a prompt is accepted
         // and lands in the log between listings without the record set moving.
         sending: questions.sendingOf(id),
-        asks: [...(carried.get(id)?.asks ?? []), ...questions.of(id)],
+        // A session's own waiting questions are paired with what it said as it
+        // asked them, from the fold this row already computed.
+        asks: [...(carried.get(id)?.asks ?? []), ...withPrefaces(questions.of(id), derived.waitingAsks)],
         approvals: [...(carried.get(id)?.approvals ?? []), ...questions.approvalsOf(id)],
       })
       this.want(record)
@@ -1064,7 +1126,19 @@ export class Corpus {
         ? (derived.title !== '' ? derived.title : (nameFromPrompt(derived.opening) || id))
         : id
       const bucket = carried.get(target) ?? { asks: [], approvals: [] }
-      bucket.asks.push(...asks.map(ask => ({ ...ask, from })))
+      // The child's own fold holds the text it asked alongside, and this is the
+      // one place that fold is read — so the preface is attached here, where the
+      // child is also named. Without it a question carried up from a subagent
+      // arrives in the parent's transcript stripped of both its author and its
+      // subject, which is exactly how a question opening "Given that" becomes
+      // unanswerable.
+      //
+      // `fromId` rides with the name so the form can link to that same child's
+      // transcript. It is the only place the carried question, its preface and
+      // its answer survive once the ask stops being pending — the parent's log
+      // never receives any of them — so a name without an id points at a record
+      // with no way to reach it.
+      bucket.asks.push(...withPrefaces(asks, derived?.waitingAsks ?? []).map(ask => ({ ...ask, from, fromId: id })))
       bucket.approvals.push(...approvals.map(approval => ({ ...approval, from })))
       carried.set(target, bucket)
     }
@@ -1428,6 +1502,10 @@ function summarize(header: SessionHeader, events: readonly SessionEvent[], prior
   // Carried across incremental folds rather than recounted, so a session that
   // keeps working keeps its tally instead of losing it to the tail-only read.
   const writes = new Map<string, number>()
+  // Carried for the same reason: the message pairing an ask with its text is
+  // folded once, and the question it belongs to may wait long after that fold's
+  // window has moved past it.
+  const prefaces = new Map<string, string>()
   // A session being written appends to the array the last read already covered,
   // so only the tail is folded. Re-folding the whole transcript per event is
   // quadratic in a log's length, and a long session is the one whose events
@@ -1445,6 +1523,7 @@ function summarize(header: SessionHeader, events: readonly SessionEvent[], prior
     seq = prior.derived.seq
     index = prior.count
     for (const [dir, count] of prior.derived.writes) writes.set(dir, count)
+    for (const [callId, said] of prior.derived.prefaces) prefaces.set(callId, said)
   }
   for (; index < events.length; index += 1) {
     const event = events[index]
@@ -1468,6 +1547,11 @@ function summarize(header: SessionHeader, events: readonly SessionEvent[], prior
     }
     // Where this session actually worked, which is what decides its worktree.
     if (event.type === 'tool/call') noteWrite(writes, event.data)
+    // The text an ask was asked alongside. Read from `assistant/message`
+    // rather than from the `tool/call`, because that is the only event where
+    // the two are in the same place: the call event carries the arguments and
+    // nothing the model said around them.
+    if (event.type === 'assistant/message') notePreface(prefaces, event.data.message.content)
     const line = preview(event)
     if (line !== null) {
       lastLine = line
@@ -1487,7 +1571,130 @@ function summarize(header: SessionHeader, events: readonly SessionEvent[], prior
   // event: this branch is already the expensive path and must not be quadratic.
   const empty = lastLine === '' && isBlank(events, header.id)
   const last = events[events.length - 1]
-  return { derived: { title, lastLine, empty, time, seq, opening, writes }, count: events.length, lastSeq: last?.seq ?? -1 }
+  // Scanned over the whole log rather than folded incrementally: a result
+  // arrives in a later event than the call it settles, so "still waiting" is a
+  // fact about the log as it now stands and cannot be accumulated forwards.
+  // Cheap because it only inspects ask calls and tool results, and a log with no
+  // ask — almost every log — leaves the loop with nothing to pair.
+  const waitingAsks = pendingAsks(events, prefaces)
+  return {
+    derived: { title, lastLine, empty, time, seq, opening, writes, prefaces, waitingAsks },
+    count: events.length,
+    lastSeq: last?.seq ?? -1,
+  }
+}
+
+/**
+ * The ask calls a log shows no answer for, oldest first.
+ *
+ * See {@link Derived.waitingAsks} for why this is the join between a waiting
+ * question and the words it was asked with.
+ * @param events - the session's events in seq order.
+ * @param prefaces - accompanying text by ask `callId`, from the fold.
+ * @returns one entry per unanswered ask call, in log order.
+ */
+function pendingAsks(events: readonly SessionEvent[], prefaces: ReadonlyMap<string, string>): readonly WaitingAsk[] {
+  const calls: { callId: string; ids: readonly string[] }[] = []
+  const settled = new Set<string>()
+  for (const event of events) {
+    if (event.type === 'tool/call' && event.data.name === ASK_TOOL) {
+      calls.push({ callId: event.data.callId, ids: questionIds(event.data.arguments) })
+    }
+    if (event.type === 'tool/result') {
+      for (const block of event.data.message.content) {
+        if (block.type === 'tool-result') settled.add(block.toolCallId)
+      }
+    }
+  }
+  const waiting: WaitingAsk[] = []
+  for (const call of calls) {
+    if (settled.has(call.callId)) continue
+    waiting.push({ ids: call.ids, preface: prefaces.get(call.callId) ?? '' })
+  }
+  return waiting
+}
+
+/**
+ * Give each waiting question the text it was asked with.
+ *
+ * The host announces a question under its own `rpcId` and the log records the
+ * call under the model's `callId`, and nothing on the wire joins the two. What
+ * joins them is that both describe the same waiting set: the unanswered ask
+ * calls in the log are exactly the questions the host is holding, in the same
+ * order.
+ *
+ * The order alone is not trusted. Each pairing is confirmed by the question ids
+ * matching, and a pair that disagrees is left without a preface rather than
+ * given one from a neighbouring question — showing the wrong reasoning above a
+ * question is far worse than showing none, because the reader cannot tell it is
+ * wrong.
+ * @param asks - the live pending asks for this session, oldest first.
+ * @param waiting - the log's unanswered ask calls, oldest first.
+ * @returns the asks, each carrying its preface where one was confirmed.
+ */
+function withPrefaces(asks: readonly PendingAsk[], waiting: readonly WaitingAsk[]): PendingAsk[] {
+  return asks.map((ask, index) => {
+    const candidate = waiting[index]
+    if (candidate === undefined || candidate.preface === '') return ask
+    const ids = ask.questions.map(question => question.id)
+    const agrees = ids.length === candidate.ids.length && ids.every((id, at) => candidate.ids[at] === id)
+    // Rendered here rather than in the browser because this is the only side
+    // that has a markdown parser: the page ships none, by design. The clip to
+    // PREFACE_MAX happened upstream on the source, so a fence or a link is cut
+    // as text and re-parsed whole, never as HTML severed mid-tag.
+    return agrees ? { ...ask, prefaceHtml: serializeAll(markdown(candidate.preface)) } : ask
+  })
+}
+
+/**
+ * The question ids an ask call put, read without trusting the model's JSON.
+ * @param raw - the call's raw arguments.
+ * @returns each question's id, or an empty list when the shape is not as expected.
+ */
+function questionIds(raw: string): readonly string[] {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return []
+  }
+  if (typeof parsed !== 'object' || parsed === null) return []
+  const questions: unknown = Reflect.get(parsed, 'questions')
+  if (!Array.isArray(questions)) return []
+  const ids: string[] = []
+  for (const question of questions) {
+    if (typeof question !== 'object' || question === null) continue
+    const id: unknown = Reflect.get(question, 'id')
+    if (typeof id === 'string') ids.push(id)
+  }
+  return ids
+}
+
+/**
+ * Record what an assistant message said beside any ask it made.
+ *
+ * One message holds the model's prose and its tool calls as sibling blocks, so
+ * the text is gathered across the whole message and then credited to each ask
+ * call in it. A message with no ask records nothing, which is the overwhelming
+ * majority of them.
+ * @param prefaces - the map to add to, keyed by ask `callId`.
+ * @param content - the assistant message's blocks.
+ */
+function notePreface(prefaces: Map<string, string>, content: readonly unknown[]): void {
+  const asks: string[] = []
+  let said = ''
+  for (const block of content) {
+    if (typeof block !== 'object' || block === null) continue
+    const part: { type?: unknown; text?: unknown; name?: unknown; id?: unknown } = block
+    if (part.type === 'text' && typeof part.text === 'string') said += part.text
+    if (part.type === 'tool-call' && part.name === ASK_TOOL && typeof part.id === 'string') asks.push(part.id)
+  }
+  if (asks.length === 0) return
+  const trimmed = said.trim()
+  // An ask with no text beside it records nothing rather than an empty string:
+  // absence is the honest answer, and the form renders no preface line at all.
+  if (trimmed === '') return
+  for (const callId of asks) prefaces.set(callId, trimmed.slice(0, PREFACE_MAX))
 }
 
 /**

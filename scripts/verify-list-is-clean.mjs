@@ -75,7 +75,7 @@ check('the list itself is rendered', viaLink.rows > 0, `${viaLink.rows} rows`)
 
 // Route two: the back button, which goes through popstate rather than the
 // router's own navigation.
-await page.goto(`${origin}/sessions?open=ws-dmwg`, { waitUntil: 'domcontentloaded' })
+await page.goto(`${origin}/sessions`, { waitUntil: 'domcontentloaded' })
 await page.waitForSelector(`#log a[href="${session}"]`, { timeout: 20000 })
 await page.locator(`#log a[href="${session}"]`).click()
 await page.waitForSelector('#log article', { timeout: 20000 })

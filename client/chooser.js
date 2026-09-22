@@ -13,7 +13,6 @@
 
 import { stamp } from 'time'
 import * as errors from 'errors'
-import * as router from 'router'
 import * as copy from 'copy'
 import * as create from 'create'
 import * as alerts from 'alerts'
@@ -25,102 +24,30 @@ let headings = []
 let trees = []
 let showing = false
 
-// Which groups the reader has opened or shut, by heading id.
+// Every workspace and every worktree is open, always. There is no collapsing
+// here and no state saying which groups are shut, because the whole list is
+// what this screen is for: a reader who came to find where work happened
+// should not have to tap twice to be shown it.
 //
-// In the URL rather than in a variable, because opening a group is a view
-// change: `/sessions?open=ws-1.wt-develop` is the screen the reader is looking
-// at, and pasting it into another browser must show the same thing. That also
-// makes it survive a reload and a back button for free.
+// A heading is still anchored, so `/sessions#ws-1` lands on a group. What it
+// no longer does is decide whether that group has anything under it.
 //
-// Only *departures* from the default are listed. A workspace is shut unless
-// named, a crowded worktree likewise, and everything else is open — so the
-// common case is a bare `/sessions` with no query at all, and the URL grows
-// only as the reader actually explores.
-const OPEN = 'open'
+// Old links may still carry a `?open=` query from when groups could be shut.
+// Nothing reads it — the screen it names and the screen without it are the
+// same screen — so it rides along harmlessly rather than being rewritten.
 
-// A group's key in that list. A workspace is its own id, but a worktree's id is
-// an absolute path, and three of those make a 263-character URL nobody can read
-// or paste — so a worktree is named instead.
+// A group's key, which now names one thing only: the element the reconciler
+// matches a repaint against, and the anchor a deep link targets.
 //
-// Qualified by its workspace, because a bare name is not unique: `main` exists
-// in two of this box's projects and `Unknown worktree` in four, so an unscoped
-// key would open every one of them at once.
-//
-// The name is stripped of spaces, because the list these keys live in is space
-// separated. A worktree is a directory and may legitimately be called `my notes`
-// — and one always is: the synthetic `Unknown worktree` bucket. Its key used to
-// split in half on the way back out of the URL, so it matched nothing, and the
-// bucket could be neither opened nor removed from the list once written. A space
-// is the one character that cannot survive here; everything else rides through
-// percent-encoding untouched.
+// A workspace is its own id, but a worktree's id is an absolute path, so a
+// worktree is named instead — qualified by its workspace, because a bare name
+// is not unique: `main` exists in two of this box's projects and
+// `Unknown worktree` in four, and an unscoped key would collide across them.
 function keyOf (group) {
   if (!group.id.startsWith('wt:')) return group.id
   return group.workspaceId + '/' + group.title.replaceAll(' ', '-')
 }
 
-// Where the last set is kept for the reader's next visit. The URL says what this
-// screen shows; this says what the reader had open the last time they chose.
-const REMEMBERED = 'sessions-open'
-
-// Parse one space-separated key list. Splits on runs of whitespace and drops the
-// empties, so a key that a hand-typed or line-wrapped URL padded out still lands
-// on the group it names.
-function parse (raw) {
-  return new Set(raw === null || raw === '' ? [] : raw.split(/\s+/).filter(part => part !== ''))
-}
-
-// Which groups are open on this screen.
-//
-// The URL wins whenever it carries the parameter: a pasted `/sessions?open=ws-1`
-// shows that reader's groups and not this browser's, which is what makes the
-// link worth pasting. An `open=` with nothing after it is a deliberate "all
-// shut" and is honoured as one, so the reader can actually get back to bare
-// defaults rather than having the memory refill the screen behind them.
-//
-// Only a URL with no parameter at all falls back to what was last opened, which
-// is the case that matters: arriving at `/sessions` from a session, a bookmark,
-// or a fresh tab.
-function toggled () {
-  const raw = new URLSearchParams(location.search).get(OPEN)
-  if (raw !== null) return parse(raw)
-  return parse(remembered())
-}
-
-// Storage is allowed to fail — a browser in private mode throws on access, and
-// an evicted or disabled store is not an error the reader should see. The screen
-// is correct with no memory at all; it just starts from its defaults.
-function remembered () {
-  try { return localStorage.getItem(REMEMBERED) } catch (error) { return null }
-}
-
-function remember (open) {
-  try { localStorage.setItem(REMEMBERED, [...open].join(' ')) } catch (error) {}
-}
-
-// Flip one group and write the result back to the URL through the router, so
-// the change lands in history exactly as a navigation does.
-//
-// The hash rides along untouched. Dropping it made the browser read the new URL
-// as a fragment navigation that had left its target, which scrolled the reader
-// to the top of the page on every toggle — and a reader who arrived from a
-// deep link into a group (`/sessions#ws-1`) hit that on their very first tap.
-function toggle (group) {
-  const key = keyOf(group)
-  const open = toggled()
-  if (!open.delete(key)) open.add(key)
-  // Kept for the next visit before the URL is touched, so the reader's last
-  // arrangement is what a later bare `/sessions` comes back to.
-  remember(open)
-  const params = new URLSearchParams(location.search)
-  // An empty set still has to be written, because it no longer matches the
-  // memory the bare URL would fall back to: shutting the last group and landing
-  // on a bare `/sessions` would otherwise re-read the set that was just closed
-  // and reopen everything the reader had shut.
-  if (open.size === 0) params.set(OPEN, '')
-  else params.set(OPEN, [...open].join(' '))
-  const query = params.toString()
-  router.go(location.pathname + (query === '' ? '' : '?' + query) + location.hash)
-}
 // Sessions whose archive POST is still in flight. A listing can arrive mid
 // request and repaint the whole list, so the state lives here rather than on the
 // button, which that repaint would throw away — leaving a pressed control
@@ -314,19 +241,13 @@ function paint () {
     next.append(empty)
     return commit(next, floor)
   }
-  const open = toggled()
   for (const group of groups) {
-    // A workspace starts shut: this box holds hundreds of sessions across a
-    // handful of projects, and opening every one of them on arrival buries the
-    // thing the reader came for.
-    const shown = open.has(keyOf(group))
-    // Every session in the workspace, across all its worktrees: a shut
-    // workspace has to report what is waiting anywhere inside it, or the reader
-    // has to open each one to find the thing that wants them.
+    // Every session in the workspace, across all its worktrees, so the heading
+    // reports what is waiting anywhere inside it without the reader adding up
+    // the worktrees below it themselves.
     const sessions = group.trees.flatMap(tree => tree.rows)
     const groupKey = keyOf(group)
-    next.append(key(header('h2', 'group', group, shown, count(sessions)), 'g:' + groupKey))
-    if (!shown) continue
+    next.append(key(header('h2', 'group', group, count(sessions)), 'g:' + groupKey))
     // Starting work in the project itself, before its checkouts are listed: the
     // same reason the worktree starter sits above its sessions. A workspace with
     // no worktrees still gets one, because the workspace is real and a session
@@ -340,22 +261,12 @@ function paint () {
       continue
     }
     for (const tree of group.trees) {
-      // A worktree opens by default, because the sessions are the point of the
-      // screen. It starts shut only where showing it would flood the workspace:
-      // several checkouts competing for the same space, and enough sessions in
-      // this one to push its siblings off the screen. Either alone is fine.
-      const crowded = group.trees.length > 3 && tree.rows.length > 2
-      // The set records departures from the default, so it *flips* whatever the
-      // default is: a crowded worktree named in it is open, an ordinary one
-      // named in it is shut. Written as the default and its exception rather
-      // than as an XOR, which reads as clever and got this backwards once.
-      const treeShown = open.has(keyOf(tree)) ? crowded : !crowded
       // The name is copyable because it is the thing a reader retypes into a
       // shell or a prompt, and retyping is where it gets misspelled. Not offered
       // on the unknown bucket, whose title is this page's own word for "we could
       // not tell", and so names no checkout to paste anywhere.
       const treeKey = keyOf(tree)
-      const heading = key(header('h3', 'tree', tree, treeShown, null,
+      const heading = key(header('h3', 'tree', tree, null,
         onDisk(tree) ? copy.button(tree.title, 'worktree name') : null,
         count(tree.rows)), 't:' + treeKey)
       // The workspace trunk stops at the last worktree, open or shut. What an
@@ -365,7 +276,6 @@ function paint () {
       const lastTree = tree === group.trees[group.trees.length - 1]
       if (lastTree) heading.dataset.last = ''
       next.append(heading)
-      if (!treeShown) continue
       // Starting work is the first thing offered under a checkout, above the
       // sessions already in it: the reader who opened a worktree to begin
       // something should not have to walk past everything they finished to
@@ -537,23 +447,15 @@ export function restore (y) {
   if (Math.abs(el.scrollTop - target) > 1) el.scrollTop = target
 }
 
-// One collapsible heading.
+// One heading.
 //
-// A control rather than a heading with a handler: it takes focus, answers Enter
-// and Space, and tells a screen reader what it does and whether it is open —
-// none of which an `h2` with a click listener does. The heading keeps its own
-// element for the anchor and the outline, so a deep link into a workspace
-// still lands.
-//
-// A `<div role=button>` rather than a `<button>`, for one structural reason:
-// `aside` — the control that copies this group's name — has to sit *inside*
-// this element's text flow so it follows the last word of a name that wraps
-// over several lines. A `<button>` cannot contain another button, which forced
-// the copy mark out to a sibling, where it aligned against the label's box
-// instead of its last line and stranded itself in the whitespace beside a
-// wrapped name. The role, tabindex and key handling below give back everything
-// the element type was providing.
-function header (tag, className, group, shown, summary, aside, trailing) {
+// Nothing here is a control: a group cannot be opened or shut, so the heading
+// only names what is under it. The inner element stays because it is what the
+// layout is built on — it carries the worktree indent, the hanging indent that
+// keeps a wrapped name in its column, and the text flow the copy mark follows
+// the last word in. The heading itself keeps the anchor, so a deep link into a
+// workspace still lands.
+function header (tag, className, group, summary, aside, trailing) {
   const heading = document.createElement(tag)
   heading.className = className
   // Anchored so a URL can link straight to the group a session is in.
@@ -568,37 +470,22 @@ function header (tag, className, group, shown, summary, aside, trailing) {
   if (anchor !== '') heading.id = anchor
   const button = document.createElement('div')
   button.className = 'disclose'
-  // Everything `<button>` gave for free, stated: the role a screen reader
-  // announces, and a place in the tab order.
-  button.setAttribute('role', 'button')
-  button.tabIndex = 0
-  // The state a screen reader announces, and the hook the stylesheet turns into
-  // the caret. One source for both, so they cannot disagree.
-  button.setAttribute('aria-expanded', String(shown))
   const label = document.createElement('span')
   label.textContent = group.title
-  // A long name truncates on screen, so the full one rides the title attribute
-  // where a hover and a long press both surface it. Set always rather than only
-  // when it overflows: whether it does depends on the viewport, and a value that
-  // appears at one width and not another is worse than one that is simply there.
+  // The name is shown in full and wraps rather than truncating, so this is not
+  // standing in for hidden text: it is the hover and long-press surface for a
+  // name that has wrapped over several lines and is easier to read in one
+  // piece. Set always, so it never appears at one viewport width and not
+  // another.
   label.title = group.title
-  // What is inside, so a shut group still says what it is waiting on. Built by
-  // the caller as an element rather than a string, because the waiting count is
-  // coloured and a string cannot carry that.
+  // What is inside, as a running tally beside the name. Built by the caller as
+  // an element rather than a string, because the waiting count is coloured and
+  // a string cannot carry that.
   button.append(label)
-  // Inside the control, directly after the name, so it follows the last word
-  // wherever that word ends up — the whole point of the role-based element.
-  // Its own click handler stops the event, so copying never also toggles.
+  // Directly after the name, so it follows the last word wherever that word
+  // ends up — which is what the inline text flow here exists for.
   if (aside !== undefined && aside !== null) button.append(copy.JOIN, aside)
   if (summary !== null && summary !== undefined) button.append(summary)
-  button.addEventListener('click', () => { toggle(group) })
-  // A real button answers Enter and Space; a div has to be told to. Space is
-  // prevented as well as handled, or it scrolls the page as it activates.
-  button.addEventListener('keydown', event => {
-    if (event.key !== 'Enter' && event.key !== ' ') return
-    event.preventDefault()
-    toggle(group)
-  })
   // A worktree's count follows the name and its copy mark in the same text
   // flow, so the heading reads name, copy, count and the tally is the one of
   // the three free to drop to the next line when the row fills. A workspace

@@ -1,12 +1,11 @@
-// The two claims that are only true in a browser: a collapsed group opens where
-// it was tapped, and a row says what its session is doing.
+// The claims about this list that are only true in a browser: every heading is
+// uniquely anchored, the tree lines end where the branches do, and a row says
+// what its session is doing.
 //
 //   node scripts/verify-state.mjs [origin]      default http://localhost:7788
 //
-// Both were reported as broken together. The first is a URL bug that only shows
-// when the same heading text repeats across workspaces — the "Unknown worktree"
-// bucket, which is synthetic and carries one id everywhere — so the check drives
-// several workspaces rather than one.
+// Nothing here opens anything first. The list does not collapse: every
+// workspace, worktree and session is on screen from the first paint.
 
 import { chromium } from '/usr/lib/node_modules/playwright/index.mjs'
 
@@ -24,14 +23,6 @@ const page = await browser.newPage({ viewport: { width: 390, height: 844 } })
 await page.goto(`${origin}/sessions`, { waitUntil: 'domcontentloaded' })
 await page.waitForSelector('#log h2.group', { timeout: 15_000 })
 
-// Open every workspace, so the worktree level is on screen to be tapped.
-await page.evaluate(() => {
-  for (const b of document.querySelectorAll('#log h2.group .disclose')) {
-    if (b.getAttribute('aria-expanded') === 'false') b.click()
-  }
-})
-await page.waitForTimeout(300)
-
 // ------------------------------------------------------------------ anchors
 // A duplicate id is what made a tap resolve to a different element than the one
 // under the finger. Every anchored heading on the page must be unique.
@@ -44,63 +35,10 @@ const dupes = await page.evaluate(() => {
 })
 check('every heading anchor on the list is unique', dupes.length === 0, dupes.join(', '))
 
-// ----------------------------------------------------------------- toggling
-// Tap a shut worktree and assert that *that* heading opened. The scroll position
-// is asserted too: the reported symptom was the page jumping to the top.
-// Everything here is done by name rather than through an element handle: a live
-// server streams listings that repaint the whole list, which detaches any handle
-// taken a moment earlier.
-const label = await page.evaluate(() => {
-  const el = document.querySelector('#log h3.tree .disclose[aria-expanded="false"]')
-  return el === null ? null : (el.querySelector('.disclose span')?.textContent ?? '')
-})
-if (label === null) {
-  check('a shut worktree exists to toggle', false, 'none on this fixture')
-} else {
-  // Scroll it into view first, so "did the page jump to the top?" is a question
-  // with a meaningful answer.
-  await page.evaluate(title => {
-    [...document.querySelectorAll('#log h3.tree')]
-      .find(el => (el.querySelector('.disclose span')?.textContent ?? '') === title)
-      ?.scrollIntoView({ block: 'center' })
-  }, label)
-  await page.waitForTimeout(150)
-  const before = await page.evaluate(() => window.scrollY)
-  // Tap the FIRST shut heading with this label and remember which one that was,
-  // by its heading's anchor id. A name is not unique on this page — the
-  // synthetic "Unknown worktree" bucket exists once per workspace that has one —
-  // so re-finding it by name afterwards can answer about a different heading
-  // entirely, which reads as "the tap did nothing" when it worked perfectly.
-  const tapped = await page.evaluate(title => {
-    const heading = [...document.querySelectorAll('#log h3.tree')]
-      .find(el => (el.querySelector('.disclose')?.getAttribute('aria-expanded') === 'false')
-        && (el.querySelector('.disclose span')?.textContent ?? '') === title)
-    if (heading === undefined) return null
-    heading.querySelector('.disclose').click()
-    return heading.id
-  }, label)
-  await page.waitForTimeout(400)
-
-  const after = await page.evaluate(() => window.scrollY)
-  const open = await page.evaluate(id => {
-    if (id === null) return 'not found'
-    // The very heading that was tapped, by its own anchor, so the answer cannot
-    // come from a namesake elsewhere on the page.
-    const el = document.getElementById(id)?.querySelector('.disclose')
-    return el?.getAttribute('aria-expanded') ?? 'gone'
-  }, tapped)
-
-  check(`tapping "${label}" expands that worktree`, open === 'true', `aria-expanded=${open}`)
-  check('tapping a worktree does not jump the page to the top',
-    !(before > 50 && after === 0), `scrollY ${before} -> ${after}`)
-}
-
-// ------------------------------------------------------- keys with a space
-// A worktree whose name holds a space must open like any other. The list of
-// open groups is space separated, so such a key used to split in half on the
-// way back out of the URL and match nothing — the group could then be neither
-// opened nor removed from the list. The synthetic "Unknown worktree" bucket is
-// always in this shape, which is why it alone was stuck shut.
+// ------------------------------------------------------- names with a space
+// A worktree name may hold a space — the synthetic "Unknown worktree" bucket
+// always does — and its anchor must still be a single usable id rather than
+// something a space splits in half.
 const spaced = await page.evaluate(() => {
   const h = [...document.querySelectorAll('#log h3.tree')]
     .find(el => (el.querySelector('.disclose span')?.textContent ?? '').includes(' '))
@@ -109,38 +47,31 @@ const spaced = await page.evaluate(() => {
 if (spaced === null) {
   console.log('      no worktree with a space in its name on this fixture; skipped')
 } else {
-  check('a worktree named with a space keeps its key out of the separator',
+  check('a worktree named with a space keeps the space out of its anchor',
     !spaced.id.includes(' '), `id="${spaced.id}"`)
-
-  const opened = await page.evaluate(async title => {
-    const pick = () => [...document.querySelectorAll('#log h3.tree')]
+  // It is showing, like every other worktree: a name with a space in it used to
+  // be the one kind that could get stuck shut.
+  const shows = await page.evaluate(title => {
+    const h = [...document.querySelectorAll('#log h3.tree')]
       .find(el => (el.querySelector('.disclose span')?.textContent ?? '') === title)
-    const was = pick().querySelector('.disclose').getAttribute('aria-expanded')
-    pick().querySelector('.disclose').click()
-    await new Promise(r => setTimeout(r, 600))
-    const now = pick().querySelector('.disclose').getAttribute('aria-expanded')
-    // Shut it again: the old bug could write the key but never take it back out.
-    pick().querySelector('.disclose').click()
-    await new Promise(r => setTimeout(r, 600))
-    return { was, now, back: pick().querySelector('.disclose').getAttribute('aria-expanded') }
+    let node = h?.nextElementSibling ?? null
+    while (node !== null && !node.matches('h2.group, h3.tree')) {
+      if (node.matches('a.row, .rowline, .starter')) return true
+      node = node.nextElementSibling
+    }
+    return false
   }, spaced.title)
-
-  check(`"${spaced.title}" changes state when tapped`, opened.was !== opened.now,
-    `${opened.was} -> ${opened.now}`)
-  check(`"${spaced.title}" can be put back as it was`, opened.back === opened.was,
-    `${opened.now} -> ${opened.back}`)
+  check(`"${spaced.title}" is open like every other worktree`, shows)
 }
 
-// The same, starting from a URL that carries a hash, which is how a deep link
-// lands the reader here. Dropping the hash on toggle is what scrolled the page.
+// A deep link into a group lands on it, and the hash it arrived with stays put.
 const wsId = await page.evaluate(() => document.querySelector('#log h2.group')?.id ?? '')
 if (wsId !== '') {
   await page.goto(`${origin}/sessions#${encodeURIComponent(wsId)}`, { waitUntil: 'domcontentloaded' })
   await page.waitForSelector('#log h2.group', { timeout: 15_000 })
-  await page.evaluate(() => document.querySelector('#log h2.group .disclose')?.click())
   await page.waitForTimeout(300)
   const kept = await page.evaluate(() => location.hash)
-  check('toggling keeps the hash the reader arrived with', kept === `#${wsId}`, `hash="${kept}"`)
+  check('a deep link into a group keeps its hash', kept === `#${wsId}`, `hash="${kept}"`)
 }
 
 // --------------------------------------------------------------- tree tails
@@ -151,12 +82,7 @@ if (wsId !== '') {
 // the flags that end them are easy to hang on the wrapper by mistake and lose.
 await page.goto(`${origin}/sessions`, { waitUntil: 'domcontentloaded' })
 await page.waitForSelector('#log h2.group', { timeout: 15_000 })
-await page.evaluate(() => {
-  for (const b of document.querySelectorAll('#log .disclose')) {
-    if (b.getAttribute('aria-expanded') === 'false') b.click()
-  }
-})
-await page.waitForTimeout(600)
+await page.waitForTimeout(300)
 
 const tails = await page.evaluate(() => {
   const out = []
@@ -203,10 +129,10 @@ check('the workspace trunk still passes rows that are not last',
 const stubs = await page.evaluate(() => {
   const out = []
   for (const h of document.querySelectorAll('#log h3.tree')) {
-    // Whatever leaf hangs below the heading. An open worktree now always opens
-    // with its "New session" control, and that control is a leaf of the tree
-    // like a session row is — it draws the same elbow — so the heading's stub
-    // has to reach it. A shut worktree has no sibling of any of these kinds.
+    // Whatever leaf hangs below the heading. A worktree always leads with its
+    // "New session" control, and that control is a leaf of the tree like a
+    // session row is — it draws the same elbow — so the heading's stub has to
+    // reach it.
     const next = h.nextElementSibling
     const hasRows = next !== null
       && (next.classList.contains('rowline') || next.classList.contains('row')
@@ -232,12 +158,7 @@ check('a worktree showing no sessions draws no stub',
 // well as colour.
 await page.goto(`${origin}/sessions`, { waitUntil: 'domcontentloaded' })
 await page.waitForSelector('#log h2.group', { timeout: 15_000 })
-await page.evaluate(() => {
-  for (const b of document.querySelectorAll('#log .disclose')) {
-    if (b.getAttribute('aria-expanded') === 'false') b.click()
-  }
-})
-await page.waitForTimeout(400)
+await page.waitForTimeout(300)
 
 const rows = await page.evaluate(() => {
   const out = []

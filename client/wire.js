@@ -58,10 +58,21 @@ export function asks (value) {
     if (typeof ask !== 'object' || ask === null || !Array.isArray(ask.questions)) fail('waiting question', ask)
     // `from` rides along when the request was carried up from a hidden child,
     // so the form can name who is asking instead of reading as this session's own.
+    //
+    // `prefaceHtml` is what the agent said in the same breath as asking, and it
+    // is admitted here for the same reason it is sent: a question opening "Given
+    // that" names a "that" that lives only in the preface. It arrives already
+    // serialized, because the markdown the agent wrote it in is parsed on the
+    // server and this page ships no parser. This validator rebuilds each ask
+    // field by field, so a field missing from this list is silently dropped no
+    // matter how correctly the server sends it and the form renders it — which
+    // is exactly how the preface stayed invisible through every reload.
     return {
       askId: str(ask.askId, 'waiting question askId'),
       questions: ask.questions.map(question),
-      ...(typeof ask.from === 'string' ? { from: ask.from } : {})
+      ...(typeof ask.from === 'string' ? { from: ask.from } : {}),
+      ...(typeof ask.fromId === 'string' ? { fromId: ask.fromId } : {}),
+      ...(typeof ask.prefaceHtml === 'string' ? { prefaceHtml: ask.prefaceHtml } : {})
     }
   })
 }

@@ -320,9 +320,7 @@ export function open (id, cache, knownEmpty) {
   // server's unfolded html, so what the cache stores and what a later replace
   // frame compares against are unaffected by it.
   fold(log, sessionId)
-  // Arriving at a session puts the reader at the top of it, not the bottom.
-  // Opening a session is a navigation, and a navigation lands at the start of
-  // the page it went to — the same as every other route this app serves.
+  // Arriving at a session puts the reader at the top of its newest message.
   //
   // This is written rather than merely left alone because the reader arrives
   // from somewhere they had scrolled, and the browser keeps that offset across
@@ -331,9 +329,9 @@ export function open (id, cache, knownEmpty) {
   // Only for a session. Routing to the list is the one case where somebody else
   // owns the offset: a tap forward is a fresh history entry that starts at the
   // top by itself, and a step back is a restoration the browser is performing
-  // from the entry it saved. Writing zero here would overwrite that restoration
-  // with the very value the collapse used to produce.
-  if (id !== null) document.scrollingElement.scrollTop = 0
+  // from the entry it saved. Writing here would overwrite that restoration with
+  // the very value the collapse used to produce.
+  if (id !== null) toNewestMessage()
   // The tail arrives moments later as a replace frame. `append` decides whether
   // to follow it to the bottom by asking `nearBottom()`, and that question is
   // meaningless here: a switch routinely paints from an empty cache, so the log
@@ -342,7 +340,7 @@ export function open (id, cache, knownEmpty) {
   // would send the reader to the end of a transcript they just opened.
   //
   // So the first paint of a session is marked as such, and the frame that fills
-  // it lands at the top instead of asking.
+  // it anchors on its newest message instead of asking.
   landed = false
 }
 
@@ -391,9 +389,10 @@ export function append (frame) {
   }
   if (frame.seq <= renderedThrough && !frame.replace) return
   // A whole-tail read that fills a session's first paint is the navigation
-  // finishing, not the reader being carried along by new work, so it lands at
-  // the top. `nearBottom` cannot answer this: the log it would measure is the
-  // empty one a switch paints from cache, where there is no bottom to be near.
+  // finishing, not the reader being carried along by new work, so it anchors on
+  // the newest message. `nearBottom` cannot answer this: the log it would
+  // measure is the empty one a switch paints from cache, where there is no
+  // bottom to be near.
   const first = frame.replace === true && !landed
   const stick = first ? false : nearBottom()
   dropPartial()
@@ -423,10 +422,15 @@ export function append (frame) {
   // Content exists now, so later frames are ordinary appends and go back to
   // asking where the reader is standing.
   if (frame.html !== '') landed = true
-  // The first paint is put at the top here rather than in `open`, because only
-  // now does the document have the height for that write to mean anything: the
-  // log `open` wrote against was empty and the browser had nowhere to put it.
-  if (first) document.scrollingElement.scrollTop = 0
+  // The first paint is anchored here rather than in `open`, because only now
+  // does the document have the height for that write to mean anything: the log
+  // `open` wrote against was empty and the browser had nowhere to put it.
+  //
+  // Only on the first paint. A later message arriving makes itself the newest
+  // one, and re-anchoring on every append would yank the page out from under a
+  // reader on every frame of a streaming turn. Live appends keep asking
+  // `nearBottom` instead, so following the end stays the reader's choice.
+  if (first) toNewestMessage()
   else toBottom(stick)
 }
 
@@ -561,6 +565,146 @@ function chrome () {
     article.dataset.stamped = ''
     article.append(stamp(Number(article.dataset.time)))
   }
+}
+
+// Put the reader at the top of whatever the session wants from them.
+//
+// Opening a session is a navigation, and a navigation lands at the start of the
+// thing it went to — but the thing worth reading is the newest message, not the
+// oldest. So the transcript is scrolled until that message's first line sits
+// just under the header, and the reader moves up through history from there
+// rather than down through it.
+//
+// A waiting question outranks it. When the agent has stopped and is asking
+// something, that question is the entire reason the session is worth opening:
+// nothing moves until it is answered, and the newest message is routinely the
+// preface *to* the question rather than the point of it. The form lives below
+// the transcript, so anchoring on the message would land the reader above the
+// one thing they are there to act on and leave them to find it.
+//
+// Only a message counts as the fallback anchor. A tool call, a progress line,
+// and the folded run they collapse into are the working-out either side of a
+// message, so anchoring on one would park the reader below the answer they
+// opened the session to read. When a session holds no message at all there is
+// nothing to anchor on and the top of the log is the honest answer.
+//
+// The browser does the rest of the decision. `scrollTop` is clamped to
+// `scrollHeight - clientHeight`, so when the last message begins less than one
+// viewport from the end — which is most short sessions — the write lands at the
+// document bottom instead, with the message fully on screen. That is exactly
+// the wanted fallback, and it needs no branch here because it is the clamp.
+// There is no scroll position above zero either, so a short transcript whose
+// message is already fully visible simply stays where it is.
+// Repeated across frames while the target is out of reach, for the same reason
+// `restoreTop` in the router is. The write happens the moment the html lands,
+// which on a cold deep link is during parse: the document is still short, the
+// offset is clamped to a maximum that has not finished growing, and rows gain
+// their real height as layout settles underneath. So the position is re-put
+// until it holds — bounded, so a transcript that genuinely cannot reach it
+// gives up rather than running forever.
+function toNewestMessage () {
+  let frames = 0
+  // The offset this loop last wrote. If the document is found somewhere else on
+  // the next frame, something other than this loop moved it — the reader, or a
+  // button that scrolls to what it just revealed — and the anchor stands down
+  // rather than dragging them back. Comparing against a remembered write is how
+  // that is noticed without a scroll listener, which this app does not use.
+  let wrote = null
+  // How far the offset may drift from this loop's own last write and still be
+  // treated as the browser's doing rather than the reader's.
+  //
+  // Not zero, because the browser moves it too. Scroll anchoring keeps whatever
+  // is on screen visually still when content above it reflows, which it does by
+  // writing `scrollTop` behind this loop's back — the header gaining its
+  // worktree line lands as a few dozen pixels of silent drift. An exact
+  // comparison reads that as the reader taking over and stands down precisely
+  // when the correction is most needed, which is the bug this band fixes.
+  //
+  // A reader's scroll is nothing like that small: a deliberate drag on a touch
+  // screen covers hundreds of pixels, and anything under one line of text is not
+  // a gesture anyone made on purpose. So the band is generous enough to absorb
+  // reflow and far too small to swallow a flick.
+  const DRIFT = 120
+  // How many frames in a row the target has already been satisfied.
+  //
+  // Landing once is not the same as having landed. The header is the reason:
+  // the worktree name arrives after the transcript on a real box — the server
+  // does not know it at first paint — and un-hiding that line grows the header
+  // from one line to two, which buries the first line of whatever this anchored
+  // on by exactly the height it gained. The offset was already "correct" when
+  // that happened, so a loop that returns on its first match has already gone.
+  //
+  // Nothing here watches the header directly: the same is true of a webfont
+  // settling or a late image, and each would need its own listener. Holding the
+  // position for a few consecutive frames instead covers all of them with one
+  // rule, and costs a handful of reads on a screen that is already painting.
+  let held = 0
+  // How many of those frames in a row count as settled.
+  //
+  // The reflow this has to outlast is the one that arrives *after* the position
+  // is already right: the composer and the status bar un-hide once the tail
+  // lands, the document grows under the anchored row, and scroll anchoring
+  // moves `scrollTop` to keep that row visually still. Measured against the
+  // mock, that correction lands between 100ms and 280ms after the last write —
+  // so ten frames expires first about one open in three, and the anchor is left
+  // sitting a couple of dozen pixels below the header.
+  //
+  // Thirty frames is half a second at 60Hz, past the slowest of those. It costs
+  // nothing a reader can see: by then the loop is reading a settled layout and
+  // writing nothing, and it still stands down the moment a scroll moves the
+  // page further than `DRIFT`.
+  const HELD = 30
+  // The ceiling on the attempt as a whole, kept well clear of `HELD` so that it
+  // is the target that ends this loop and not the budget.
+  const LIMIT = 180
+  const put = () => {
+    const el = document.scrollingElement
+    if (wrote !== null && Math.abs(el.scrollTop - wrote) > DRIFT) return
+    // A question the session is waiting on, if there is one. First rather than
+    // last: the forms are in the order they were asked, and the oldest
+    // unanswered one is the one holding everything else up.
+    //
+    // `querySelector` answers null and an empty row list answers undefined, so
+    // the fallback is written out rather than reached for with `??`, which would
+    // take a null form as an answer and walk past the guard below.
+    const asking = document.querySelector('#ask form')
+    const messages = log.querySelectorAll('article[data-role="user"], article[data-role="assistant"], article[data-role="subagent"]')
+    const anchor = asking === null ? messages[messages.length - 1] : asking
+    if (anchor === undefined) { el.scrollTop = 0; return }
+    // Measured rather than assumed: the header is sticky, so it paints over the
+    // top of the transcript, and its height changes with a wrapped worktree
+    // name. Anchoring to the raw document position would hide the anchor's
+    // first line under it.
+    const header = document.querySelector('header')
+    const clearance = header === null || header.hidden ? 0 : header.getBoundingClientRect().height
+    const want = documentTop(anchor) - clearance
+    if (Math.abs(el.scrollTop - want) > 1) el.scrollTop = want
+    wrote = el.scrollTop
+    // Settled only once the target has held still across consecutive frames, so
+    // a late reflow that moves it — the header gaining its worktree line — is
+    // corrected rather than raced. A frame that misses resets the count.
+    held = Math.abs(el.scrollTop - want) <= 1 ? held + 1 : 0
+    // Settled, or the document cannot grow any further towards it.
+    if (held >= HELD || frames >= LIMIT) return
+    frames += 1
+    requestAnimationFrame(put)
+  }
+  put()
+}
+
+// Take the opening anchor again, for a caller that has just painted something
+// which outranks what the anchor first chose.
+//
+// The waiting-question forms live outside the log and are rendered after it, so
+// the cold deep link anchors before they exist. This is how that paint says so,
+// rather than `open` reaching across into a section it does not own.
+//
+// Declines once the session has been read: the anchor is an opening position,
+// and re-taking it after the reader has started moving around would drag them
+// back. `landed` is already exactly that flag.
+export function reanchor () {
+  if (sessionId === null || landed) return
+  toNewestMessage()
 }
 
 // A one-shot read during an append. Not a scroll handler; no scroll or wheel

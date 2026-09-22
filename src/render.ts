@@ -63,6 +63,20 @@ export function isConversation(event: SessionEvent): boolean {
   // answer ticked into that same form once one exists. Both halves of the
   // exchange live on this one row, so it is the only one to keep.
   if (event.type === 'tool/call') return event.data.name === ASK_TOOL
+  // The words a question was asked with, which are part of the question.
+  //
+  // A model writes its reasoning as text and calls the ask tool in the *same*
+  // assistant message, and a question routinely refers straight back to it —
+  // "Given that…" names a "that" that exists only here. Keeping the call while
+  // letting this be truncated preserved the question and dropped its subject,
+  // which is how a transcript ends up showing a question nobody can answer.
+  //
+  // Only messages that actually made an ask are kept, so ordinary narration is
+  // still bounded with the rest of the work.
+  if (event.type === 'assistant/message') {
+    if (!isAppendSurfaceEvent(event)) return false
+    return event.data.message.content.some(block => block.type === 'tool-call' && block.name === ASK_TOOL)
+  }
   return false
 }
 

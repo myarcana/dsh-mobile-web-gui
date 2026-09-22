@@ -42,7 +42,25 @@ function build (sessionId, ask) {
   // A request carried up from a hidden child names it here. Without this the
   // form would read as this session's own question, which is the confusion
   // that hiding the child's row would otherwise create.
-  if (ask.from !== undefined) form.append(line('from', 'Asked by ' + ask.from))
+  // Linked to the child's own transcript when its id came along. That transcript
+  // is the only durable record of this exchange — the parent's log never
+  // receives the child's question, its preface or its answer — so once the ask
+  // is answered and this form disappears, the link is the only way back to it.
+  if (ask.from !== undefined) form.append(asked(ask.from, ask.fromId))
+  // What the agent said as it asked. A question routinely refers straight back
+  // to it — "Given that…" names a "that" that lives here and nowhere else — so
+  // without this the form can be literally unanswerable. Above the questions
+  // because that is the order it was written and read in.
+  //
+  // Inserted as markup, like a transcript frame and for the same reason it is
+  // safe to: the server built it from the closed node vocabulary, which has no
+  // script, style, or attribute-bearing variant to express.
+  if (ask.prefaceHtml !== undefined && ask.prefaceHtml !== '') {
+    const preface = document.createElement('div')
+    preface.className = 'preface'
+    preface.insertAdjacentHTML('beforeend', ask.prefaceHtml)
+    form.append(preface)
+  }
   for (const question of ask.questions) {
     form.append(line('question', question.header === '' ? question.question : question.header + ': ' + question.question))
     if (question.detail !== '') form.append(line('detail', question.detail))
@@ -128,6 +146,21 @@ function line (className, text) {
   const p = document.createElement('p')
   p.className = className
   p.textContent = text
+  return p
+}
+
+// Who asked, linked to their transcript when the id came along.
+//
+// A plain name when it did not: the link is how the record stays reachable, but
+// the attribution is what stops the question reading as this session's own, and
+// that must not depend on the id being there.
+function asked (from, fromId) {
+  const p = line('from', 'Asked by ')
+  if (fromId === undefined) { p.textContent = 'Asked by ' + from; return p }
+  const a = document.createElement('a')
+  a.href = '/s/' + encodeURIComponent(fromId)
+  a.textContent = from
+  p.append(a)
   return p
 }
 

@@ -262,7 +262,6 @@ async function create (workspaceId, opened) {
     }
     dialog.append(cancel())
   } finally {
-    running = false
     clearInterval(ticker)
   }
 }
