@@ -1,11 +1,15 @@
-// Publish the on-screen keyboard's height as --kb, so CSS can keep the
-// document and the composer above it.
+// Publish the on-screen keyboard's height as --kb, so CSS can cap the message
+// box at a share of what is actually visible.
 //
 // Needed because iOS does not support `interactive-widget=resizes-content`:
-// WebKit leaves the layout viewport at full height and simply covers the
-// bottom of it with the keyboard, so anything pinned to the viewport bottom
-// ends up behind the keyboard, and the browser then scrolls past the end of
-// the document trying to reveal the focused field.
+// WebKit leaves the layout viewport at full height and covers the bottom of it
+// with the keyboard, so 100dvh still means the whole screen.
+//
+// It is deliberately not used to position anything. iOS already pans the
+// visible area up by the keyboard's height to reveal the focused box, which
+// lands the sticky composer just above the keys on its own. Lifting the
+// composer or padding the body by --kb as well counted the keyboard twice and
+// threw the box off the top of the screen.
 //
 // On a browser that does honour the key, both viewports shrink together and
 // the difference below is 0, so nothing is published and nothing is paid for.
@@ -36,10 +40,8 @@ export function track (composer) {
     // scroll signal is needed.
     const covered = typing ? Math.max(0, Math.round(window.innerHeight - vv.height)) : 0
     // Never write a value that is already there. A write to --kb invalidates
-    // layout for the whole document and changes the body's bottom padding, so
-    // it moves the reader's scroll position — and `resize` fires for things
-    // that leave the covered height untouched. Same reasoning as the guard in
-    // `view.toBottom`.
+    // style for the whole document, and `resize` fires for things that leave
+    // the covered height untouched.
     if (covered === published) return
     published = covered
     document.documentElement.style.setProperty('--kb', covered + 'px')

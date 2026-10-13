@@ -195,9 +195,10 @@ ${entry === undefined ? '' : `<script type=module src="${entry.url}" nonce="${no
  *   the icon. These tags are not legacy cruft — dropping them silently
  *   downgrades every iPhone install to a screenshot in a browser frame.
  *
- * `theme-color` is what paints the status bar on Android, and it is emitted per
- * scheme so the bar matches the page the reader actually gets rather than
- * forcing a light bar onto a dark page.
+ * `theme-color` is what paints the status bar on Android. It is black in every
+ * scheme, matching the manifest's `theme_color`, so the bar looks like system
+ * chrome from the splash screen onward instead of changing colour once the page
+ * loads.
  *
  * Every icon href is the digest-stamped url, so the icons are immutable and
  * cached forever; only the manifest itself sits at a stable, revalidated path.
@@ -222,8 +223,7 @@ function installTags(assets: AssetTable): string {
   tags.push('<meta name=apple-mobile-web-app-status-bar-style content=default>')
   tags.push('<meta name=apple-mobile-web-app-title content="Harness">')
   tags.push('<meta name=mobile-web-app-capable content=yes>')
-  tags.push('<meta name=theme-color media="(prefers-color-scheme: light)" content="#fff">')
-  tags.push('<meta name=theme-color media="(prefers-color-scheme: dark)" content="#121212">')
+  tags.push('<meta name=theme-color content="#000">')
   return tags.join('\n')
 }
 

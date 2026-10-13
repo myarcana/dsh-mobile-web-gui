@@ -826,6 +826,9 @@ function preview (row) {
 function state (row) {
   if (row.asks.length > 0 || row.approvals.length > 0) return 'asking'
   if (row.running) return 'working'
+  // Still waiting on the reader like a finished session, so the heading counts
+  // it as waiting — but its turn did not complete, and the dot says so.
+  if (row.failed) return 'failed'
   return 'done'
 }
 
@@ -836,6 +839,7 @@ function state (row) {
 const WORDS = {
   asking: 'Asking you a question or for permission',
   working: 'Working',
+  failed: 'The last turn ended with an error',
   done: 'Finished'
 }
 

@@ -45,6 +45,11 @@ const hub = new StreamHub(ctx, HARNESS_ORIGIN)
 // served as idle, so its corrections are pushed on the same seam every other
 // row change uses.
 ctx.on('sessions/changed', () => { hub.notify() })
+// A status flip appends nothing the corpus folds, and it can move a row other
+// than its own: a hidden subagent starting or finishing turns its parent's dot.
+// So each transition pushes a fresh listing rather than waiting on a log event
+// that may have raced ahead of the status frame.
+ctx.on('session/status', () => { hub.notify() })
 const assets = await loadAssets(fileURLToPath(new URL('../client', import.meta.url)))
 
 const server = await listen(ctx, assets, hub, PORT, HOST)

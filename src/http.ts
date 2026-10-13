@@ -21,7 +21,7 @@ import { browse, createSession, createWorkspace, makeDirectory } from './create.
 import { toAnswers } from './questions.ts'
 import { toOutcome } from './approvals.ts'
 import { send } from './send.ts'
-import { earlier, expanded, expandedRun, tail } from './sessions.ts'
+import { earlier, expanded, expandedRun, reply, tail } from './sessions.ts'
 import { policy, shell, unresolvedImports, SERVICE_WORKER, SERVICE_WORKER_URL, type ShellState } from './shell.ts'
 import { idOf, StreamHub } from './stream.ts'
 import type { AskSource, Corpus } from './corpus.ts'
@@ -151,6 +151,13 @@ export function handler(ctx: Context, assets: AssetTable, hub: StreamHub): Handl
       // already on screen. A client that painted from a cache written before
       // that rule existed says so, and gets the unfiltered chunk.
       return json(res, await earlier(ctx, id, Number(before[2]), url.searchParams.get('kept') !== '0'))
+    }
+    // The reply to one prompt, which a tap on that prompt merges in beneath it.
+    const answered = /^\/api\/s\/([^/]+)\/reply\/(\d+)$/.exec(path)
+    if (req.method === 'GET' && answered !== null) {
+      const html = await reply(ctx, SessionId(decodeURIComponent(answered[1] ?? '')), Number(answered[2]))
+      if (html === null) return json(res, { error: true, message: 'No such prompt', detail: path }, 404)
+      return json(res, { html })
     }
     // `/t/12` is one run from its first tool event; `/t/12-30` also says where
     // that run ended, which a run that swallowed the narration between its calls

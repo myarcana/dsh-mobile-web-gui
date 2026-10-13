@@ -19,6 +19,7 @@
  */
 
 import { existsSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { basename, dirname } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
@@ -77,14 +78,6 @@ const FOLD_DELAY_MS = 200
 const UNGROUPED_ORDER = 1_000_000
 
 /**
- * Characters kept from a session's first prompt, for naming an untitled session.
- *
- * Holding whole prompts for every session on the box would keep megabytes alive
- * to answer one question.
- */
-const OPENING_MAX = 2_000
-
-/**
  * Ancestor directories credited for one file write.
  *
  * A write is counted against its parent and that parent's parents, so a change
@@ -98,6 +91,8 @@ const WRITE_ANCESTORS = 12
 interface Derived {
   readonly title: string
   readonly lastLine: string
+  /** Whether the latest turn ended with an error. Cleared by the next `turn/start`. */
+  readonly failed: boolean
   /**
    * Whether the read log renders no transcript frame at all.
    *
@@ -109,7 +104,12 @@ interface Derived {
   readonly time: number
   readonly seq: number
   /**
-   * The session's first prompt, used to name a session that never titled itself.
+   * The session's whole first prompt, whitespace collapsed to single spaces.
+   *
+   * It is the session's name unless the reader renamed it. Kept whole, never
+   * cut to a word count or a character budget: a shortened prompt drops the
+   * words that tell two similar sessions apart, and the title wraps rather
+   * than truncating anywhere it is shown.
    */
   readonly opening: string
   /**
@@ -215,7 +215,7 @@ const PREFACE_MAX = 4_000
 
 /** A row with nothing derived yet, which is a real state rather than a failure. */
 function underived(header: SessionHeader): Derived {
-  return { title: '', lastLine: '', empty: false, time: header.createdAt, seq: -1, opening: '', writes: new Map(), prefaces: new Map(), waitingAsks: [] }
+  return { title: '', lastLine: '', failed: false, empty: false, time: header.createdAt, seq: -1, opening: '', writes: new Map(), prefaces: new Map(), waitingAsks: [] }
 }
 
 /** One row's content, and how much of its log that content already covers. */
@@ -384,6 +384,7 @@ export class Corpus {
     // cached with the shape: a child's pending ask arrives and settles between
     // requests without the record set moving at all.
     const { carried } = this.attributed(records, questions)
+    const busy = this.busyUnder(records)
     const { hidden, visible, bySession, groups, trees, worktrees } = await this.shaped(records, questions)
     // One question for the whole listing: archiving is a registry capability,
     // not a per-session one.
@@ -401,15 +402,18 @@ export class Corpus {
       const tree = trees.get(id)
       rows.push({
         id,
-        // An explicit user rename wins, then the first prompt's content words,
-        // then a plain statement of fact. A model-generated title is not in this
-        // chain at all: it reads as invented next to a name made of the words
-        // the reader actually typed.
+        // An explicit user rename wins, then the whole first prompt exactly as
+        // typed, then a plain statement of fact. A model-generated title is not
+        // in this chain at all: it reads as invented next to the words the
+        // reader actually typed.
         // The cwd is deliberately not in this chain either:
         // every session in a workspace shares one, so a path names the folder
         // the reader is already looking at rather than the session.
-        title: derived.title !== '' ? derived.title : (nameFromPrompt(derived.opening) || 'New session'),
-        running: agent?.status === 'running',
+        title: derived.title || derived.opening || 'New session',
+        // Its own turn, or a subagent it delegated to: a parent waiting on its
+        // children is still working, not waiting on the reader. `actions` below
+        // stays on the agent's own status — Stop can only reach this session.
+        running: agent?.status === 'running' || busy.has(id),
         // The last seq in the log, not the last one folded. Both are the same
         // `event.seq` the stream sends and the page stores as `renderedThrough`
         // — there is one sequence here — but `derived.seq` only moves when the
@@ -427,6 +431,7 @@ export class Corpus {
         worktreeId: tree?.id ?? '',
         worktree: tree?.title ?? '',
         lastLine: derived.lastLine,
+        failed: derived.failed,
         empty: derived.empty,
         time: derived.time,
         // Every visible session accepts a prompt. A cold one — a log with no
@@ -445,9 +450,18 @@ export class Corpus {
         // Read live, never folded into the cached shape: a prompt is accepted
         // and lands in the log between listings without the record set moving.
         sending: questions.sendingOf(id),
-        // A session's own waiting questions are paired with what it said as it
-        // asked them, from the fold this row already computed.
-        asks: [...(carried.get(id)?.asks ?? []), ...withPrefaces(questions.of(id), derived.waitingAsks)],
+        // A session's own waiting questions carry no preface, because this
+        // session's transcript is on screen underneath the form and the words it
+        // asked with are already an assistant message in it. Attaching them here
+        // too drew the same paragraph twice, a few inches apart — once as the
+        // message the agent wrote, and again inside the question's own frame.
+        //
+        // A *carried* ask is the opposite case and keeps its preface: it comes
+        // from a hidden child whose transcript is nowhere on this page, so the
+        // form is the only place those words can appear at all. That asymmetry is
+        // the whole rule — the preface is drawn exactly where the transcript
+        // cannot speak for itself.
+        asks: [...(carried.get(id)?.asks ?? []), ...questions.of(id)],
         approvals: [...(carried.get(id)?.approvals ?? []), ...questions.approvalsOf(id)],
       })
       this.want(record)
@@ -1116,14 +1130,14 @@ export class Corpus {
       //
       // The same chain the row title uses, so the child is named here exactly as
       // it would be named on its own row: an explicit user rename, then the
-      // content words of the child's own first prompt. Only `derived.title` on
+      // child's own whole first prompt. Only `derived.title` on
       // its own would usually be empty — most titles are model paraphrases the
       // GUI deliberately ignores — and the label would fall through to a bare
       // id. The id is still the last resort: `New session` names nothing, and a
       // request that says which child is asking is the whole point.
       const derived = this.folded.get(id)?.derived
       const from = derived !== undefined
-        ? (derived.title !== '' ? derived.title : (nameFromPrompt(derived.opening) || id))
+        ? (derived.title || derived.opening || id)
         : id
       const bucket = carried.get(target) ?? { asks: [], approvals: [] }
       // The child's own fold holds the text it asked alongside, and this is the
@@ -1143,6 +1157,43 @@ export class Corpus {
       carried.set(target, bucket)
     }
     return { carried }
+  }
+
+  /**
+   * Visible sessions with a hidden subagent that is still working for them.
+   *
+   * A parent that delegates ends its own turn straight away — "I've started two
+   * fix agents" — and waits to be handed their results, so its own agent reads
+   * idle while its work is plainly in progress. The children carry no row, so
+   * without this the parent showed as finished and was counted as waiting on
+   * the reader for as long as its subagents ran.
+   *
+   * Climbs `parentSession` to the nearest visible ancestor, the same walk
+   * {@link attributed} uses to carry a child's questions up, so a depth-2
+   * child's work lands on the row that spawned the chain.
+   * @param records - the sessions being listed.
+   * @returns ids of visible rows that have a running hidden descendant.
+   */
+  private busyUnder(records: readonly SessionRecord[]): ReadonlySet<string> {
+    const busy = new Set<string>()
+    const working = records.filter(record =>
+      isSubagent(record.header) && this.ctx.agents.get(record.header.id)?.status === 'running')
+    if (working.length === 0) return busy
+    const { byId, hidden } = this.lineage(records)
+    for (const record of working) {
+      let cursor = record.header.parentSession
+      const seen = new Set<string>([bareId(record.header.id)])
+      while (typeof cursor === 'string' && !seen.has(bareId(cursor))) {
+        seen.add(bareId(cursor))
+        const parent = byId.get(cursor)
+        if (parent !== undefined && !hidden.has(parent.id)) {
+          busy.add(parent.id)
+          break
+        }
+        cursor = parent?.parentSession
+      }
+    }
+    return busy
   }
 
   /**
@@ -1495,6 +1546,7 @@ function normalizePath(path: string): string {
 function summarize(header: SessionHeader, events: readonly SessionEvent[], prior?: Fold): Fold {
   let title = ''
   let lastLine = ''
+  let failed = false
   let opening = ''
   let time = header.createdAt
   let seq = -1
@@ -1518,6 +1570,7 @@ function summarize(header: SessionHeader, events: readonly SessionEvent[], prior
   ) {
     title = prior.derived.title
     lastLine = prior.derived.lastLine
+    failed = prior.derived.failed
     opening = prior.derived.opening
     time = prior.derived.time
     seq = prior.derived.seq
@@ -1543,10 +1596,16 @@ function summarize(header: SessionHeader, events: readonly SessionEvent[], prior
     if (opening === '' && event.type === 'user/message') {
       let text = ''
       for (const block of event.data.content) if (block.type === 'text') text += block.text
-      opening = text.slice(0, OPENING_MAX)
+      // Collapsed once here rather than on every request: a title is one run
+      // of wrapping text, so the prompt's line breaks become spaces.
+      opening = text.replace(/\s+/g, ' ').trim()
     }
     // Where this session actually worked, which is what decides its worktree.
     if (event.type === 'tool/call') noteWrite(writes, event.data)
+    // How the latest turn ended. A new turn starting clears it, so a session
+    // that failed and was then prompted again stops reading as failed.
+    if (event.type === 'turn/start') failed = false
+    if (event.type === 'turn/end') failed = event.data.reason.kind === 'error'
     // The text an ask was asked alongside. Read from `assistant/message`
     // rather than from the `tool/call`, because that is the only event where
     // the two are in the same place: the call event carries the arguments and
@@ -1578,7 +1637,7 @@ function summarize(header: SessionHeader, events: readonly SessionEvent[], prior
   // ask — almost every log — leaves the loop with nothing to pair.
   const waitingAsks = pendingAsks(events, prefaces)
   return {
-    derived: { title, lastLine, empty, time, seq, opening, writes, prefaces, waitingAsks },
+    derived: { title, lastLine, failed, empty, time, seq, opening, writes, prefaces, waitingAsks },
     count: events.length,
     lastSeq: last?.seq ?? -1,
   }
@@ -1865,13 +1924,14 @@ function noteWrite(writes: Map<string, number>, data: unknown): void {
  */
 function noteCommand(writes: Map<string, number>, parsed: object): void {
   const { workdir, command }: { workdir?: unknown; command?: unknown } = parsed
-  if (typeof workdir === 'string' && workdir.startsWith('/')) {
-    writes.set(workdir, (writes.get(workdir) ?? 0) + COMMAND_WEIGHT)
+  if (typeof workdir === 'string') {
+    const dir = expandHome(workdir)
+    if (dir.startsWith('/')) writes.set(dir, (writes.get(dir) ?? 0) + COMMAND_WEIGHT)
   }
   if (typeof command !== 'string') return
   // A command may name one path many times; each mention counts, because a
   // checkout worked in repeatedly is named repeatedly.
-  for (const match of command.matchAll(COMMAND_PATHS)) {
+  for (const match of expandHome(command).matchAll(COMMAND_PATHS)) {
     const named = match[0]
     // A trailing separator or dot is punctuation in the command, not part of
     // the directory, so `cd /root/coding/develop/ &&` and the path without the
@@ -1881,6 +1941,25 @@ function noteCommand(writes: Map<string, number>, parsed: object): void {
     writes.set(path, (writes.get(path) ?? 0) + COMMAND_WEIGHT)
   }
 }
+
+/**
+ * Spell a shell's `~/` as the home directory it means.
+ *
+ * Agents write `cd ~/coding/<project>/<checkout> && …` at least as often as the
+ * absolute form, and without this {@link COMMAND_PATHS} read the tail after the
+ * tilde as `/coding/<project>/<checkout>` — a path that exists nowhere — so a
+ * session that ran every command inside one checkout was filed under "Unknown
+ * worktree". Only a tilde standing where a word starts is expanded, so a `~`
+ * inside a word or a `~user/` form is left as written.
+ * @param text - a command, or a workdir.
+ * @returns the same text with each leading `~/` made absolute.
+ */
+function expandHome(text: string): string {
+  return text.includes('~') ? text.replace(/(?<![\w~./-])~(?=\/)/g, HOME) : text
+}
+
+/** The home directory `~` names, read once; the process never changes user. */
+const HOME = homedir()
 
 /**
  * Credit a directory and its ancestors for one piece of evidence.
@@ -1921,143 +2000,6 @@ function plain(source: string): string {
     .replace(/^#{1,6}\s+/gm, '')
     .replace(/\s+/g, ' ')
     .trim()
-}
-
-/**
- * Function words dropped when naming a session after its first prompt.
- *
- * Closed-class words only — articles, pronouns, prepositions, conjunctions,
- * auxiliaries, and the handful of politeness and intent verbs that open almost
- * every prompt ("make", "need", "want", "please"). Those carry no information
- * *here* precisely because they are near-universal: a list where every row
- * starts "we need to make the" distinguishes nothing. Content words stay,
- * including the domain nouns that actually tell two sessions apart.
- */
-const FUNCTION_WORDS: ReadonlySet<string> = new Set(
-  `a an the this that these those there here and or but so then than if when while
-   of in on at to for with from by as into over under out up down off again once
-   is are was were be been being am do does did done have has had having
-   i you we they it its our your their my me us them he she his her
-   will would can could should shall may might must not no nor
-   all any both each few more most other some such only own same too very just now also
-   what which who whom whose why how
-   make made making get got getting let lets need needs want wants
-   please thanks thank ok okay yes yeah nope nah`.split(/\s+/),
-)
-
-/** Content words kept in a derived session name. */
-const NAME_WORDS = 8
-
-/** Characters kept from a URL's path before it is truncated in a derived name. */
-const URL_PATH_MAX = 24
-
-/**
- * Reduce a URL in a prompt to the part that identifies what it points at.
- *
- * An origin is the least informative text a prompt can contain here: the
- * sessions that mention one mostly mention the *same* one, so it fills a name
- * with characters shared by every row while the path — `/sessions`,
- * `/recordings/6aa03dc…` — is what tells two of them apart.
- *
- * Truncation keeps the front, because a path's leading segment is its category
- * and its tail is usually an opaque id; keeping the tail would name a session
- * after a hex string.
- * @param word - one whitespace-delimited token from a prompt.
- * @returns the shortened path, the hostname when the URL has no path, or null when not an http(s) URL.
- */
-function shortenUrl(word: string): string | null {
-  // Cheap reject before the expensive parse. `new URL` on every word of every
-  // prompt was 62% of this endpoint's CPU: it throws for the overwhelming
-  // majority of tokens, and building and unwinding that error costs far more
-  // than the two-character test that proves it cannot be a web URL. Only
-  // `http:`/`https:` survive the protocol check below, so anything without
-  // `//` in it could never have reached it.
-  if (!word.includes('//')) return null
-  let parsed: URL
-  try {
-    parsed = new URL(word)
-  } catch {
-    return null
-  }
-  // Only the web schemes. A `mailto:` or `file:` token is already the readable
-  // thing a reader would recognize, and has no origin worth removing.
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null
-  const tail = `${parsed.pathname}${parsed.search}${parsed.hash}`.replace(/\/+$/, '')
-  // A bare origin keeps its hostname: trimming it to '/' would name nothing.
-  if (tail === '') return parsed.hostname
-  return tail.length <= URL_PATH_MAX ? tail : `${tail.slice(0, URL_PATH_MAX - 1)}…`
-}
-
-/**
- * Name a session after its first prompt, minus the function words.
- *
- * This is the normal name for a session. The harness also writes `session/title`
- * events from a model provider or its own word-trim fallback, but those are
- * ignored: a paraphrase reads as invented beside the words the reader typed.
- * Only an explicit user rename outranks this.
- *
- * Words are kept in the order they were typed rather than by frequency: the
- * opening clause of a prompt is where the ask lives, and a reordered name reads
- * as noise even when it holds the right words.
- * @param opening - the session's first prompt, already captured for worktree naming.
- * @returns a short name, or '' when the prompt holds no content words.
- */
-/**
- * Names already derived, keyed by the exact prompt they were derived from.
- *
- * The name is a pure function of the opening prompt, and the opening prompt is
- * captured once and never changes — but the row that shows it is rebuilt on
- * every request and every broadcast, so the same few hundred prompts were being
- * re-tokenized continuously. Keyed by the prompt rather than by session id so a
- * fold that re-derives an unchanged opening reuses the answer too.
- *
- * Bounded because the keys are whole prompts: without a cap this would hold
- * every prompt on the box alive to answer a question about titles.
- */
-const named = new Map<string, string>()
-
-/** Prompts whose derived name is kept; beyond this the oldest are dropped. */
-const NAMED_MAX = 1_000
-
-function nameFromPrompt(opening: string): string {
-  const hit = named.get(opening)
-  if (hit !== undefined) return hit
-  const name = deriveName(opening)
-  named.set(opening, name)
-  // Map iterates in insertion order, so the oldest key is the first one out.
-  while (named.size > NAMED_MAX) {
-    const oldest = named.keys().next()
-    if (oldest.done === true) break
-    named.delete(oldest.value)
-  }
-  return name
-}
-
-/**
- * Derive a session's name from its first prompt.
- * @param opening - the session's first prompt.
- * @returns a short name, or '' when the prompt holds no content words.
- */
-function deriveName(opening: string): string {
-  const kept: string[] = []
-  for (const word of plain(opening).split(/\s+/)) {
-    // A URL is shortened before anything else touches it: the punctuation trim
-    // below would eat its scheme and leave a bare `//host/path`.
-    const url = shortenUrl(word.replace(/[),.:;]+$/, ''))
-    if (url !== null) {
-      kept.push(url)
-      if (kept.length >= NAME_WORDS) break
-      continue
-    }
-    // Trim surrounding punctuation only. Inner marks are load-bearing in the
-    // vocabulary these prompts use — `titles/names`, `dsh.openclaw.test`,
-    // `ask_user_question` — and a word split on them stops naming the thing.
-    const bare = word.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '')
-    if (bare === '' || FUNCTION_WORDS.has(bare.toLowerCase())) continue
-    kept.push(bare)
-    if (kept.length >= NAME_WORDS) break
-  }
-  return kept.join(' ')
 }
 
 /**

@@ -34,8 +34,7 @@ check('no page errors on load', errors.length === 0, errors.join(' | '))
 
 const box = page.locator('#box')
 await box.focus()
-// Settle: focusing opens the action row and publishes --kb, both of which move
-// the document legitimately. The measurement starts after that has landed.
+// Settle: focusing opens the action row, which moves the document legitimately. The measurement starts after that has landed.
 await page.waitForTimeout(400)
 
 const read = () => page.evaluate(() => ({

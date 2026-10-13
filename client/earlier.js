@@ -67,6 +67,7 @@ export function offer (more, from) {
   // Only ever further back. `-1` means "nothing known", which is why the first
   // bound for a session is adopted whatever it says.
   if (bound < 0 || (restated >= 0 && restated < bound)) bound = restated
+  mark(more, restated)
   if (!more) return retire()
   // Move the existing link back to the top: a repaint replaces the log's
   // contents wholesale, so the node has to be put back after one.
@@ -162,6 +163,64 @@ async function load () {
   // of the log, which would end the walk here and strand everything between.
   offer(more, bound)
 }
+
+// The first paint keeps every prompt however far back it sits, but not what
+// answered it, so a prompt above the unread stretch stands with no reply under
+// it. Those prompts are marked, and tapping one reads its reply into place.
+//
+// `data-opened` lives on the row itself, so a replace that repaints the log
+// brings the prompt back closed — which is true, because the reply read into it
+// went with the repaint.
+function mark (more, edge) {
+  for (const el of log.querySelectorAll('article[data-role="user"][data-seq]')) {
+    const closed = more && edge >= 0 && Number(el.dataset.seq) < edge && el.dataset.opened === undefined
+    el.toggleAttribute('data-closed', closed)
+  }
+}
+
+log.addEventListener('click', async event => {
+  const el = event.target.closest('article[data-closed]')
+  // A press that ended a text selection is a copy, not a tap; and a link or a
+  // button inside the prompt does its own thing.
+  if (el === null || !getSelection().isCollapsed || event.target.closest('a, button') !== null) return
+  const id = view.current()
+  if (id === null) return
+  delete el.dataset.closed
+  el.dataset.opened = ''
+  // A spinner row straight under the prompt, before the request goes out, so the
+  // tap visibly landed even when the reply takes a slow link a while to arrive.
+  const spinner = document.createElement('article')
+  spinner.dataset.loading = ''
+  spinner.textContent = 'Loading the reply…'
+  el.after(spinner)
+  const url = '/api/s/' + encodeURIComponent(id) + '/reply/' + el.dataset.seq
+  let body
+  try {
+    const response = await fetch(url)
+    if (!response.ok) {
+      spinner.remove()
+      el.toggleAttribute('data-closed', true)
+      delete el.dataset.opened
+      return errors.fromResponse('GET', url, response, 'Session: ' + id)
+    }
+    body = wire.expandedEvent(await response.json())
+  } catch (error) {
+    spinner.remove()
+    el.toggleAttribute('data-closed', true)
+    delete el.dataset.opened
+    return errors.show('Could not load the reply', 'GET ' + url + '\n' + String(error) + '\nAt: ' + new Date().toString())
+  }
+  // Gone before the merge, so it never sits among the rows the reply seats against.
+  spinner.remove()
+  if (view.current() !== id || !el.isConnected) return
+  // Merged by seq, so the reply seats directly under its prompt and any row
+  // already on screen is not drawn twice.
+  view.prepend(body.html)
+  // Put the prompt at the top of the screen so the reply is what the reader sees.
+  const header = document.querySelector('header')
+  const clearance = header === null || header.hidden ? 0 : header.getBoundingClientRect().height
+  document.scrollingElement.scrollTop += el.getBoundingClientRect().top - clearance
+})
 
 // Full technical detail inline, and the link restored so the reader can retry.
 function failed (url, summary, detail) {

@@ -28,7 +28,7 @@ import type { AssetTable } from './assets.ts'
 export const MANIFEST_URL = '/app.webmanifest'
 
 /**
- * The colour behind the icon and the system chrome of the installed app.
+ * The colour behind the icon on the installed app's splash screen.
  *
  * DeepSeek blue, which is the background the whale mark is drawn on in
  * `client/icon.svg`. It is deliberately not one of the stylesheet's theme
@@ -36,6 +36,12 @@ export const MANIFEST_URL = '/app.webmanifest'
  * before any CSS exists — a splash screen cannot read a media query.
  */
 const BRAND = '#4d6bfe'
+
+/**
+ * The installed app's status bar. Black, not {@link BRAND}: a blue bar reads as
+ * a coloured stripe across the top of the phone rather than as system chrome.
+ */
+const BAR = '#000'
 
 /**
  * Build the manifest for the current asset table.
@@ -93,7 +99,7 @@ export function manifest(assets: AssetTable): string {
     // rendering for the name and description below.
     lang: 'en',
     background_color: BRAND,
-    theme_color: BRAND,
+    theme_color: BAR,
     description: 'Command and orchestrate DeepSeek Harness sessions from a phone.',
     icons,
   })

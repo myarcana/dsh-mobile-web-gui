@@ -479,23 +479,30 @@ if (named === null) {
     headerName !== null && !headerName.clipped && !headerName.ellipsis && !headerName.nowrap,
     JSON.stringify(headerName))
 
-  // The session's own title, beneath it, is held to the same rule: a name cut
-  // short is a name the reader cannot read, and the end — the part an ellipsis
-  // eats — is usually what distinguishes two similar sessions.
+  // The session's own title, beneath it, wraps and is never cut sideways, but
+  // stops at three lines: a long title would otherwise eat the transcript under
+  // a sticky header. Measured with a long title swapped in, then put back.
   const titleCut = await page.evaluate(() => {
     const el = document.getElementById('title')
     if (el === null) return null
+    const was = el.textContent
+    el.textContent = 'a very long session title that keeps going '.repeat(20)
     const style = getComputedStyle(el)
-    return {
-      chars: (el.textContent ?? '').length,
+    const line = parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.2
+    const out = {
       clipped: el.scrollWidth > el.clientWidth + 1,
       ellipsis: style.textOverflow === 'ellipsis',
       nowrap: style.whiteSpace === 'nowrap' || style.whiteSpace === 'pre',
+      lines: Math.round(el.clientHeight / line),
     }
+    el.textContent = was
+    return out
   })
-  check('the session title is never truncated',
+  check('the session title wraps, never cut sideways',
     titleCut !== null && !titleCut.clipped && !titleCut.ellipsis && !titleCut.nowrap,
     JSON.stringify(titleCut))
+  check('a long session title stops at three lines',
+    titleCut !== null && titleCut.lines === 3, JSON.stringify(titleCut))
 
   // Nothing anywhere on either screen may clip its text horizontally. A blanket
   // sweep rather than a list of elements, so a rule added later to some other

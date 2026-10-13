@@ -6,7 +6,8 @@
 //     `/s/<id>/menu` — a view change with its own address.
 //  2. That URL is a deep link: opened cold in a fresh tab it shows the same
 //     menu, over the same session's transcript.
-//  3. The menu names the session it belongs to, and offers Archive.
+//  3. The menu offers Archive, named for its session, without repeating the
+//     session's name as a heading — the title it drops from already says it.
 //  4. The back button closes it and leaves the reader on the session, not on
 //     the list — the menu is a screen, so the way out is the way back.
 //  5. Escape and a tap outside close it the same way.
@@ -73,9 +74,8 @@ check(
   page.url()
 )
 
-// 3. It names the session, and offers archiving.
-const named = await page.$eval('#menu h2', el => el.textContent)
-check('the menu names the session it belongs to', named === row.title, `showed "${named}", session is "${row.title}"`)
+// 3. It offers archiving, without repeating the title it drops from.
+check('the menu does not repeat the session name', await page.$('#menu h2') === null)
 const labels = await page.$$eval('#menu button', els => els.map(el => el.textContent))
 check('the menu offers archiving', labels.some(label => label.includes('Archive')), labels.join(' | '))
 check('nothing in the menu is shouted', labels.every(label => label !== label.toUpperCase() || label.length < 2), labels.join(' | '))
@@ -119,8 +119,9 @@ await fresh.goto(`${origin}/s/${encodeURIComponent(row.id)}/menu`, { waitUntil: 
 await fresh.waitForSelector('#menu:not([hidden])', { timeout: 15_000 })
 check('the menu URL opens the menu in a fresh browser', await fresh.$eval('#menu', el => !el.hidden))
 check('the deep link paints the session behind the menu', await fresh.$eval('#log', el => el.children.length > 0))
-const freshName = await fresh.$eval('#menu h2', el => el.textContent)
-check('the deep-linked menu names the session once the list lands', freshName === row.title, `showed "${freshName}"`)
+await fresh.waitForSelector('#menu button.danger', { timeout: 15_000 })
+const freshName = await fresh.$eval('#menu button.danger', el => el.getAttribute('aria-label'))
+check('the deep-linked menu names the session once the list lands', freshName === `Archive ${row.title}`, `showed "${freshName}"`)
 await fresh.close()
 
 // 6. Archiving hides the session and lands on the list.

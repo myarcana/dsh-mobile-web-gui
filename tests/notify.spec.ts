@@ -45,6 +45,7 @@ function row(
     worktreeId: '',
     worktree: '',
     lastLine: 'last words of ' + id,
+    failed: false,
     empty: false,
     time: 0,
     actions: ['send'],

@@ -335,8 +335,19 @@ function result (s, callId, text, isError) {
 // waiting question and answers it through `POST /api/answer`.
 let nextAskId = 0
 
-async function ask (s, questions) {
-  const callId = call(s, 'ask_user_question', { questions })
+// `preface` is the words the model wrote in the *same* assistant message as the
+// question, which is the shape that makes a session's own ask carry one. Passing
+// it routes through `asked` so the text and the call share a message, exactly as
+// a real model emits them; omitting it keeps the bare call this used to make.
+//
+// Worth a fixture because the own-session preface had no coverage at all: every
+// waiting question here either carried no preface or was carried up from a hidden
+// child, so the one case where the transcript already shows those words — and the
+// form must therefore not repeat them — was never on screen to check.
+async function ask (s, questions, preface) {
+  const callId = preface === undefined
+    ? call(s, 'ask_user_question', { questions })
+    : asked(s, questions, preface)
   const controller = new AbortController()
   s.question = controller
   const askId = 'mock-ask-' + (nextAskId += 1)
@@ -425,9 +436,12 @@ function words (answer) {
 }
 
 // What a real agent does with steering: log it, then run a turn.
-function prompt (s, message) {
-  add(s, 'user/message', { content: message.content, source: message.source })
+async function prompt (s, message) {
   const text = message.content.map(block => block.text ?? '').join('')
+  // A prompt accepted but not logged for a while, as on a busy agent that takes
+  // steering only at its next step boundary.
+  if (/\bslowlog\b/i.test(text)) await sleep(4000)
+  add(s, 'user/message', { content: message.content, source: message.source })
   turn(s, async () => {
     // A run that arrives one event at a time, so the folding can be watched
     // growing rather than only read back from a finished log.
@@ -492,12 +506,13 @@ turn(billing, async () => {
   const answer = await ask(billing, [{
     id: 'split',
     header: 'Approach',
-    question: 'How should invoice.ts be split?',
+    question: 'Given those two seams, how should invoice.ts be split?',
     options: [
       { label: 'By feature (Recommended)', description: 'Tax, discounts and totals each get a file' },
       { label: 'By layer', description: 'Types, pure logic and IO each get a file' }
     ]
-  }])
+  }], 'The `total` function is the only thing both seams touch, so whichever way'
+    + ' it splits, that function is the one that has to move.')
   if (answer === null) return false
   await stream(billing, 'Splitting it: ' + words(answer.answers[0]) + '.')
   return true

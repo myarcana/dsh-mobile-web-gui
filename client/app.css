@@ -55,12 +55,7 @@ body {
   min-height: 100dvh;
   display: flex;
   flex-direction: column;
-  /* --kb is the on-screen keyboard's height, published by keyboard.js. With
-     border-box sizing it is carved out of the 100dvh rather than added to it,
-     so the document never extends below the keyboard and there is nothing
-     blank to scroll into. It is 0 on every platform that shrinks the layout
-     viewport itself. */
-  padding: 0 var(--gap) var(--kb, 0px);
+  padding: 0 var(--gap);
   background: var(--paper);
   color: var(--ink);
   font: 16px/1.5 system-ui, sans-serif;
@@ -146,8 +141,7 @@ h1 {
   font-size: 11px;
   font-weight: 600;
   /* The min-width lets the control inside wrap its text rather than forcing
-     the grid column wide enough to hold the longest unbroken word. Nothing here
-     truncates: the title wraps to as many lines as the name needs. */
+     the grid column wide enough to hold the longest unbroken word. */
   min-width: 0;
 }
 
@@ -179,19 +173,26 @@ h1 {
   display: block;
   width: 100%;
   margin: 0;
-  padding: 0 0 8px;
+  padding: 0;
+  /* The 8px below is a transparent border, not padding: overflow clips at the
+     padding box, so padding would show the top of the fourth line the clamp
+     below cuts off. A border is outside the clip and still takes taps. */
   border: 0;
+  border-bottom: 8px solid transparent;
   background: none;
   color: inherit;
   font: inherit;
   text-align: left;
-  /* Wraps onto as many lines as it needs, never truncated. A name cut short is
-     a name the reader cannot read, and the header exists to say which session
-     and which checkout this is — the two facts a truncation is most likely to
-     eat, because the part that differs between two similar names is usually the
-     end. The header grows instead; it is sticky, so it costs a little of the
-     transcript's first screen and nothing else. */
+  /* Wraps, but stops at three lines: the header is sticky, so every line it
+     grows is taken from the transcript on every screen, and a title can run to
+     a paragraph. The whole title is one tap away — this opens the menu, whose
+     heading carries it in full. The worktree line above is never cut. */
   overflow-wrap: anywhere;
+  /* A height cap, not line-clamp: WebKit ignores line-clamp on a button. Three
+     line-heights plus the border below (box-sizing is border-box), so the cut
+     lands exactly on a line boundary. */
+  max-height: calc(3lh + 8px);
+  overflow: hidden;
   touch-action: manipulation;
 }
 
@@ -285,15 +286,6 @@ h1 {
 /* display:flex would otherwise beat the browser's own [hidden] rule. */
 #menu[hidden] { display: none; }
 
-/* The session being acted on, named in full. It wraps rather than truncating:
-   this is the one place where the whole title is worth the height. */
-#menu h2 {
-  margin: 0;
-  font-size: 13px;
-  font-weight: 600;
-  overflow-wrap: anywhere;
-}
-
 /* Archiving is the one control here that changes anything, so it is the one
    that carries colour. Amber rather than red: archiving hides a session, it does
    not delete it, and red would overstate what the tap does. */
@@ -380,6 +372,15 @@ article {
 }
 
 article[data-role="user"] { background: var(--sunk); padding-inline: var(--gap); margin-inline: calc(var(--gap) * -1); }
+/* A kept prompt whose reply sits behind the unread stretch: tapping it reads the
+   reply in underneath. */
+article[data-closed] { cursor: pointer; }
+/* The row that stands under a tapped prompt while its reply is on the way. */
+article[data-loading] { display: flex; align-items: center; gap: 8px; min-height: 44px; color: var(--dim); }
+article[data-loading]::before { content: ''; width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--line); border-top-color: var(--dim); }
+@media (prefers-reduced-motion: no-preference) {
+  article[data-loading]::before { animation: spin 900ms linear infinite; }
+}
 article[data-role="subagent"] { border-left: 3px solid var(--line); padding-left: var(--gap); margin-left: 0; }
 article[data-role="tool"], article[data-role="progress"] { font-size: 14px; color: var(--dim); }
 
@@ -891,6 +892,9 @@ article li .pick { margin: 0 6px 0 0; vertical-align: baseline; }
    the heading above uses. */
 .row[data-state="asking"] .dot { background: var(--warn); }
 
+/* The last turn ended with an error. */
+.row[data-state="failed"] .dot { background: #c62828; }
+
 /* Working: a grey ring with one brighter arc, turning. Grey because work in
    progress asks for nothing — it tells the reader to wait, not to act. */
 .row[data-state="working"] .dot {
@@ -902,10 +906,11 @@ article li .pick { margin: 0 6px 0 0; vertical-align: baseline; }
 @media (prefers-color-scheme: dark) {
   .dot { background: #4caf50; }
   .row[data-state="working"] .dot { background: none; }
+  .row[data-state="failed"] .dot { background: #ef5350; }
 }
 
-/* The only animation on the page, and it runs solely on rows that are actually
-   working. Transform-only, so it stays on the compositor and costs no layout,
+/* Runs solely on rows that are actually working (and on a reply's loading row
+   while it is on screen). Transform-only, so it stays on the compositor and costs no layout,
    and it stops the moment the row repaints in any other state. */
 @media (prefers-reduced-motion: no-preference) {
   .row[data-state="working"] .dot { animation: spin 900ms linear infinite; }
@@ -1271,8 +1276,12 @@ article li .pick { margin: 0 6px 0 0; vertical-align: baseline; }
 
 #composer {
   position: sticky;
-  /* Pin above the keyboard, not above the viewport edge it is covering. */
-  bottom: var(--kb, 0px);
+  /* 0, not the keyboard's height. iOS does not shrink the layout viewport for
+     the keyboard; it pans the visible area up by the keyboard's height to show
+     the focused box, which already lands this bar just above the keys. Lifting
+     it by --kb as well counted the keyboard twice and threw the box off the
+     top of the screen. */
+  bottom: 0;
   /* Full-bleed across the body's side gutter. */
   margin-inline: calc(var(--gap) * -1);
   display: flex;
@@ -1285,12 +1294,15 @@ article li .pick { margin: 0 6px 0 0; vertical-align: baseline; }
 }
 
 /* A row of actions on the draft, above the box and on a line of its own.
-   Shown only while the composer has focus: these act on text being typed, so
-   off-focus they would be a row of controls for a task nobody is doing.
+   Shown only while the reader is writing: these act on text being typed, so
+   otherwise they would be a row of controls for a task nobody is doing.
 
-   :focus-within rather than a focus listener, so the row's presence cannot
-   disagree with where focus actually is. The buttons keep focus inside the
-   composer, so pressing one does not pull the row out from under the finger.
+   A class set while the reader is writing, not :focus-within. The row has to
+   survive a press on its own buttons, and on Safari it did not: WebKit does not
+   focus a button when it is pressed, so :focus-within stopped matching and the
+   row was display:none before the finger lifted — and a click is only synthesised
+   when press and release land on the same rendered element, so these buttons
+   never fired at all there. app.js owns the class; see the note beside it.
 
    One row high, always. The buttons never wrap onto a second line: the row
    scrolls sideways instead, so the composer's height is the same whether this
@@ -1312,13 +1324,28 @@ article li .pick { margin: 0 6px 0 0; vertical-align: baseline; }
    pinch-zoom stays granted so the page remains zoomable from here, which the
    project's accessibility rule requires of every surface.
 
-   The buttons carry the rule too. touch-action is read from the element the
-   touch actually hits and the buttons fill the row, so naming only #actions
-   would bind the 8px gaps between them and leave every button scrolling the
-   page. pan-y is the one to avoid: it kills the sideways drag outright. */
-#actions, #actions button { touch-action: pan-x pinch-zoom; }
+   The strip carries that rule, and the buttons deliberately do not.
+   touch-action is read from the element the touch actually hits, so it is
+   tempting to repeat `pan-x pinch-zoom` onto the buttons that fill the row —
+   and that is exactly what stopped Merge and Rebase working on Safari. A value
+   that omits `tap` leaves WebKit treating the press as pan-only: it withholds
+   the synthesised click while it waits to see whether the finger is starting a
+   sideways drag, and on a press that never moves, the click it was holding is
+   simply never dispatched. Chrome and Firefox dispatch it regardless, which is
+   why the row worked everywhere else and nowhere on WebKit.
+
+   `manipulation` is the value a button wants: it grants the tap, and drops only
+   double-tap-to-zoom, which is what makes the tap fast rather than delayed.
+   Losing `pan-x` on the button costs nothing that is wanted — a sideways drag
+   begun on a button still pans the strip, because an unnamed pan is inherited
+   from the scrolling ancestor rather than refused. What it does give up is the
+   suppression of vertical panning, so a vertical drag from a button scrolls the
+   page; that is the ordinary behaviour of a control and worth a press that
+   lands. This is the same value every other button in this file carries. */
+#actions button { touch-action: manipulation; }
 
 #actions {
+  touch-action: pan-x pinch-zoom;
   display: none;
   flex-basis: 100%;
   gap: 8px;
@@ -1327,7 +1354,7 @@ article li .pick { margin: 0 6px 0 0; vertical-align: baseline; }
   scrollbar-width: none;
 }
 #actions::-webkit-scrollbar { display: none; }
-#composer:focus-within #actions { display: flex; }
+#composer.composing #actions { display: flex; }
 
 /* display:flex would otherwise beat the browser's own [hidden] rule, which is
    what hides the two buttons naming a checkout this session has none of. */
@@ -1336,11 +1363,11 @@ article li .pick { margin: 0 6px 0 0; vertical-align: baseline; }
 /* Undo is always present, so it says plainly when there is nothing to put back
    rather than being a control that silently does nothing.
 
-   pointer-events keeps the disabled button hit-testable, which is what makes
-   the strip's touch-action apply over it. A disabled control is skipped by
-   hit-testing by default, so the touch resolves against whatever is behind it
-   and the page scrolls from the one button in the row that is most often
-   disabled. Restoring hit-testing does not make it pressable: `disabled` is
+   pointer-events keeps the disabled button hit-testable, so a finger landing on
+   it is still a finger on the strip. A disabled control is skipped by
+   hit-testing by default, so the touch would resolve against whatever is behind
+   it, and the one button in the row that is most often disabled would be a hole
+   in the strip. Restoring hit-testing does not make it pressable: `disabled` is
    what refuses the click, the focus and the submit, and it still does. */
 #actions button:disabled {
   opacity: 0.4;

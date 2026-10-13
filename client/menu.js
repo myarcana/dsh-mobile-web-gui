@@ -46,10 +46,9 @@ export function render (id, row) {
   if (sheet.dataset.drawn === drawn) return
   sheet.dataset.drawn = drawn
   sheet.hidden = false
-  const heading = document.createElement('h2')
-  // Specific, never "Session options": this session's own name.
-  heading.textContent = row === undefined ? 'This session' : row.title
-  const items = [heading]
+  // No heading: the title the menu drops from already names the session, and
+  // each control's label names it again for a screen reader.
+  const items = []
   // Only what the server offered. A session that is not working sends no stop
   // action, a profile with no workspace registry sends no archive action, and
   // then there is no such control here.

@@ -38,6 +38,91 @@ const undo = document.getElementById('undo')
 const insertWorktree = document.getElementById('insert-worktree')
 const rebase = document.getElementById('rebase')
 const merge = document.getElementById('merge')
+const actions = document.getElementById('actions')
+
+// The action row used to exist only while the composer held focus, as
+// `#composer:focus-within #actions`. Tying a control's existence to focus is what
+// made these buttons unpressable on Safari, in two different ways.
+//
+// WebKit does not focus a <button> when it is pressed, on macOS or iOS. So the
+// press blurred the box, `:focus-within` stopped matching, and the row was set to
+// `display: none` between the finger landing and lifting. WebKit synthesises a
+// click only when press and release land on the same rendered element, so the
+// click was never dispatched. Chrome and Firefox focus the button, keep the row up
+// and fire the click, which is why this only ever reproduced in Safari.
+//
+// Cancelling the mousedown to hold focus in the box fixed that press and broke the
+// next one: with focus kept in the textarea, Safari took the press as the start of
+// its own text-selection gesture, dropped the programmatic selection to (0,0) and
+// then swallowed the following pointerup entirely — so the second press produced a
+// pointerdown with no release and no click, for good.
+//
+// So the row no longer asks where focus is. `composing` is set while the reader is
+// writing and stays set across a press, because a button in the row is part of
+// writing rather than an interruption of it. Nothing about the row changes while a
+// press is in flight, so there is no race for WebKit to lose, and focus is left to
+// behave normally — no cancelled mousedown, no suppressed default, and the browser
+// is free to focus the button exactly as it prefers.
+function showComposing (on) {
+  composer.classList.toggle('composing', on)
+}
+
+box.addEventListener('focus', () => { showComposing(true) })
+
+// Focus leaving the composer entirely ends the act of writing. Checked on the next
+// frame because focus moves in two steps — the old element blurs before the new one
+// focuses — so reading it synchronously would see the gap between them and close
+// the row on its own buttons.
+//
+// `activeElement` alone is not enough to say focus left, and trusting it is what
+// kept these buttons dead on Safari after the row stopped using :focus-within.
+// WebKit does not focus a <button> when it is pressed, so a finger landing on
+// Merge blurs the box and moves focus to nothing — `activeElement` is <body>,
+// which the composer does not contain. The row was hidden one frame into the
+// press, and a click is only synthesised when press and release land on the same
+// rendered element, so the release landed on nothing and no click was ever
+// dispatched. The box losing its caret is the visible half of that; the dead
+// button is the other half of the same event.
+//
+// So a press in flight inside the composer is what is consulted, and focus only
+// decides the case where no press is happening. `pressing` is set on pointerdown
+// and outlives the frame this check runs in, which is precisely the window
+// WebKit's unfocused press falls through.
+box.addEventListener('blur', () => {
+  requestAnimationFrame(() => {
+    if (pressing) return
+    if (!composer.contains(document.activeElement)) showComposing(false)
+  })
+})
+
+// Whether a finger or cursor is currently down on the composer. Held from
+// pointerdown until the press ends, so the blur that WebKit fires on the way
+// into a button press can tell "the reader is using this row" apart from "the
+// reader has left". Capture, so it is set before the blur handler's frame runs
+// even if something inside stops the event bubbling; `pointercancel` clears it
+// alongside `pointerup` so a gesture the browser claims does not leave the row
+// pinned open forever.
+let pressing = false
+composer.addEventListener('pointerdown', () => { pressing = true }, true)
+const endPress = () => {
+  pressing = false
+  // Re-run the decision a press may have deferred: if things have settled with
+  // focus outside the composer — a press that left, or WebKit never focusing
+  // the button it landed on — the row closes, but only once nothing is in
+  // flight. A press that ended on a button leaves focus back in the box,
+  // because every one of these handlers ends by focusing it.
+  //
+  // Run for every press, not only one that began inside the composer. A tap on
+  // the transcript blurs the box without focusing anything, and the blur can
+  // land after this pointerup; skipping the re-check when the press started
+  // elsewhere is what left the row open for a reader who had plainly left it.
+  requestAnimationFrame(() => {
+    if (pressing) return
+    if (!composer.contains(document.activeElement)) showComposing(false)
+  })
+}
+document.addEventListener('pointerup', endPress, true)
+document.addEventListener('pointercancel', endPress, true)
 
 // Per session, keyed by id: the composer draft.
 const drafts = new Map()
@@ -158,10 +243,14 @@ create.observe((sessionId, opened) => {
 })
 
 await store.boot()
+await outbox.boot()
+// The first paint ran before storage was open, so the prompts this device still
+// holds for the session on screen are drawn now that they can be read.
+view.local()
 
-outbox.observe(row => {
+outbox.observe((row, fresh) => {
   if (row.kind === 'approval') approval.state(row)
-  else if (row.askId === undefined) view.pending(row)
+  else if (row.askId === undefined) view.pending(row, fresh)
   else ask.state(row)
 })
 outbox.listen()
@@ -176,6 +265,7 @@ stream.connect({
     if (frame.replace) earlier.offer(frame.more, frame.oldest)
   },
   token (frame) { view.token(frame) },
+  through () { return view.through() },
   summaries (listing) {
     chooser.update(listing)
     create.update(listing)
@@ -539,14 +629,13 @@ composer.addEventListener('submit', async event => {
   drafts.delete(id)
   // The message is on its way, so the empty box is not damage to undo.
   forgetUndo()
-  // Sending ends the act of writing, so focus leaves the composer entirely and
-  // the action row goes with it: those controls edit a draft, and there is no
-  // longer a draft to edit. The row is tied to :focus-within, so blurring the
-  // box alone would not do it — a tap on Send leaves focus on Send, which is
-  // itself inside the composer and holds the row open. Blur whatever the
-  // composer currently holds, which covers both the box (Enter to send) and
-  // the button (tap to send). The keyboard closes with it, which is the point:
-  // the reply is what the reader wants to see next, not the composer.
+  // Sending ends the act of writing, so the action row goes: those controls edit
+  // a draft, and there is no longer a draft to edit. Said outright rather than
+  // left to follow from focus, because the row no longer tracks focus. Focus is
+  // still dropped so the keyboard closes with it, which is the point: the reply
+  // is what the reader wants to see next, not the composer. Blur whatever the
+  // composer holds, covering both the box (Enter to send) and the button (tap).
+  showComposing(false)
   if (composer.contains(document.activeElement)) document.activeElement.blur()
   await outbox.queue(id, { text })
 })
@@ -565,7 +654,7 @@ document.getElementById('clear').addEventListener('click', () => { replaceDraft(
 // and goes.
 //
 // The two prompt-writers do not need the name in advance — they need it at
-// press time, and where the page does not have one it can ask. Hiding them
+// press time, and where the page does not have one they ask for it. Hiding them
 // instead made the checkout the page happened to know about the gate on an
 // action the reader could perfectly well name themselves, which is how a
 // session started from "New session in develop" and then left empty — nothing
@@ -574,99 +663,34 @@ document.getElementById('clear').addEventListener('click', () => { replaceDraft(
 //
 // Insert stays conditional, because it is different in kind: its whole content
 // is the name. A button labelled with an empty string is not a control, and
-// prompting for a name in order to type that name into the box is a longer way
-// of typing it.
+// asking for a name in order to type that name into the box is a longer way of
+// typing it.
 function showWorktreeActions (name) {
   const known = name !== null
   insertWorktree.hidden = !known
   if (known) insertWorktree.textContent = name
 }
 
-// Whether `prompt` is answering without ever showing anything.
-//
-// A browser gives no way to ask this directly, and the obvious proxy — how long
-// the call took — is not safe on its own: a reader who cancels the instant the
-// dialog appears is indistinguishable from a dialog that never appeared, and
-// telling that reader their browser is broken would be worse than saying
-// nothing. So a single fast `null` is treated as an ordinary Cancel.
-//
-// Suppression is inferred only from the shape it actually has: a browser that
-// has latched "prevent additional dialogs" returns `null` instantly EVERY time,
-// so two consecutive instant nulls mean the reader is no longer being asked.
-// The first one stays quiet, the second reports — which is also the press at
-// which a reader would start wondering why nothing is happening.
-const INSTANT_MS = 8
-let instantNulls = 0
-
-// The checkout to write into a prompt, asked for when the page has none.
+// The checkout these prompts are about: the name when the page has it, asked
+// for when it does not.
 //
 // Read from the Insert button's own label whenever it is showing, so what is
-// written is always what the reader can see. Otherwise the reader is asked, and
-// the answer is kept against this session: it is the same fact the server would
-// have supplied, so it stands until the server supplies it, and Merge after
-// Rebase does not ask twice.
+// written is always what the reader can see, and no question is put to a reader
+// who would only be retyping what is already on screen.
 //
-// `null` when the reader cancels, which is not a failure — it is them declining
-// to answer, and the draft they already have is left untouched.
-function worktreeName (action) {
+// Where the page has no name, ask for it outright. These prompts name the
+// checkout several times over — Merge names it three times — so the name has to
+// be known *before* the draft is written; a placeholder left in the text for the
+// reader to type over only ever replaced the first of them, and the draft went
+// out still claiming to rebase a branch called WORKTREE.
+//
+// `null` means the reader cancelled, and cancelling writes nothing at all.
+function askWorktreeName () {
   if (!insertWorktree.hidden) return insertWorktree.textContent
-  const id = view.current()
-  let asked
-  let refused = false
-  const before = Date.now()
-  try {
-    asked = prompt('Which worktree? This session has not written anything yet,'
-      + ' so its checkout cannot be read from disk.')
-  } catch (error) {
-    // A dialog the browser refused outright. Without this the throw escapes the
-    // click handler and the button looks broken rather than blocked.
-    asked = null
-    refused = true
-  }
-  const instant = Date.now() - before < INSTANT_MS
-  // `null` covers two very different things: the reader pressing Cancel, and the
-  // browser declining to show the dialog at all — a suppressed "prevent
-  // additional dialogs", or a frame without `allow-modals`. The reader's own
-  // Cancel is a quiet outcome and must stay quiet. A dialog that never appeared
-  // has to say so, or the press is indistinguishable from a dead button.
-  if (asked === null) {
-    instantNulls = instant || refused ? instantNulls + 1 : 0
-    // A throw is proof on its own; otherwise it takes a repeat, because one fast
-    // null is far more likely to be a decisive Cancel than a blocked dialog.
-    if (refused || instantNulls >= 2) {
-      errors.show(action + ' needs the worktree name, and this browser is not showing the prompt.',
-        'This session has written nothing yet, so its checkout cannot be read from disk,'
-        + ' and window.prompt() ' + (refused ? 'threw instead of opening a dialog.' : 'returned null immediately, twice, without presenting a dialog.')
-        + '\nThis is usually a suppressed dialog ("prevent this page from creating'
-        + ' additional dialogs"), or a frame without allow-modals.'
-        + '\nWorkaround: reload the page to clear the suppression, or send any message'
-        + ' first so the server can derive the checkout from what the session writes.'
-        + '\nSession: ' + (id ?? 'none')
-        + '\nAt: ' + new Date().toString())
-    }
-    return null
-  }
-  // A dialog that was answered proves dialogs work, so a later fast Cancel
-  // starts from a clean slate rather than inheriting a stale count.
-  instantNulls = 0
-  const name = asked.trim()
-  // An empty answer is the reader pressing OK on an empty box. Say what did not
-  // happen; returning in silence is the failure this whole branch exists to stop.
-  if (name === '') {
-    errors.show(action + ' needs the worktree name, and none was entered.',
-      'The prompt was answered with an empty value, so there is no checkout name to'
-      + ' write into the draft. The draft has been left untouched.'
-      + '\nSession: ' + (id ?? 'none')
-      + '\nAt: ' + new Date().toString())
-    return null
-  }
-  if (id !== null) {
-    started.set(id, name)
-    // Paint it: the header names the checkout and Insert becomes available, so
-    // the answer shows up everywhere the derived name would have.
-    showWorktree(name)
-  }
-  return name
+  const answer = window.prompt('Which worktree?')
+  if (answer === null) return null
+  const name = answer.trim()
+  return name === '' ? null : name
 }
 
 // Insert at the caret, replacing whatever is selected — the bare name, no
@@ -687,14 +711,14 @@ insertWorktree.addEventListener('click', () => {
 })
 
 rebase.addEventListener('click', () => {
-  const name = worktreeName('Rebase')
+  const name = askWorktreeName()
   if (name === null) return
   replaceDraft('Pull develop, then rebase ' + name
     + ' onto develop, then review develop..' + name)
 })
 
 merge.addEventListener('click', () => {
-  const name = worktreeName('Merge')
+  const name = askWorktreeName()
   if (name === null) return
   replaceDraft('pull develop, rebase ' + name
     + ' onto develop, then apply all the work of ' + name
@@ -705,8 +729,12 @@ merge.addEventListener('click', () => {
 // What Clear, Rebase and Merge all do: put a new draft in the box, keeping the
 // one they displaced so a stray tap is recoverable. Focus returns to the box
 // rather than staying on the button, because the keyboard is open and the
-// reader's next act is typing. It also keeps focus inside the composer, which
-// is what holds the action row on screen.
+// reader's next act is typing.
+//
+// Pressing the same button twice is deliberately a no-op: it writes the prompt it
+// always writes, which the box already holds, so the second press changes nothing
+// on screen. That is correct, not a failure to fire — the draft is already what
+// the button is for.
 function replaceDraft (text) {
   // Only a replacement that actually displaces something is worth undoing;
   // clearing an empty box would otherwise arm Undo to restore nothing.

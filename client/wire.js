@@ -37,6 +37,9 @@ export function summary (value) {
     worktreeId: typeof value.worktreeId === 'string' ? value.worktreeId : '',
     worktree: typeof value.worktree === 'string' ? value.worktree : '',
     lastLine: str(value.lastLine, 'session summary lastLine'),
+    // The latest turn ended with an error. An older server sends nothing, which
+    // reads as "not failed" rather than as a malformed row.
+    failed: value.failed === true,
     // True only once the whole log has been read and held no message. An unread
     // session reports false, so a row never claims emptiness it has not checked.
     empty: value.empty === true,

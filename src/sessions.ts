@@ -138,6 +138,45 @@ export async function earlier(
 }
 
 /**
+ * Render the reply to one prompt: every event after it up to the next prompt.
+ *
+ * The first paint keeps every prompt however far back it sits, but not what
+ * answered it, so an old prompt stands on screen with its reply missing. This is
+ * what fills that gap when the reader taps the prompt. The page merges the result
+ * by seq, so rows already on screen are dropped rather than drawn twice.
+ * @param ctx - the plugin context.
+ * @param id - the session to read.
+ * @param seq - the prompt's position.
+ * @returns the frames' HTML, or null when that seq names no prompt.
+ */
+export async function reply(ctx: Context, id: SessionId, seq: number): Promise<string | null> {
+  const events = (await ctx.sessionQuery.readSession(id)).events
+  const at = events.findIndex(event => event.seq === seq)
+  const prompt = events[at]
+  if (prompt === undefined || !isPrompt(prompt)) return null
+  const after = events.slice(at + 1)
+  const next = after.findIndex(isPrompt)
+  const range = next < 0 ? after : after.slice(0, next)
+  // Bounded like any other read. The end of a reply is the answer, so that is
+  // the end kept; anything before it stays reachable behind "Older messages".
+  const window = range.length > TAIL_LIMIT ? range.slice(range.length - TAIL_LIMIT) : range
+  const answers = answerIndex(events)
+  const settled = settledAsks(events)
+  let html = ''
+  for (const event of window) html += renderEvent(event, id, answers, settled) ?? ''
+  return html
+}
+
+/**
+ * Whether an event is the person's own prompt.
+ * @param event - the event to classify.
+ * @returns true for a user message a transcript keeps.
+ */
+function isPrompt(event: SessionEvent): boolean {
+  return event.type === 'user/message' && isConversation(event)
+}
+
+/**
  * Render one event's expanded view.
  * @param ctx - the plugin context.
  * @param id - the session holding the event.

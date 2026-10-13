@@ -50,7 +50,11 @@ function start () {
     if (epoch !== null && epoch !== data.epoch) handlers.restarted()
     epoch = data.epoch
     streamId = data.streamId
-    if (wanted !== null) send(wanted.sessionId, wanted.from)
+    // Where the transcript stands *now*, never where it stood when the session
+    // was opened. Re-sending that first cursor on every reconnect asked for
+    // everything since the open again, and it was drawn once more under the copy
+    // already on screen — the same prompt repeated once per reconnect.
+    if (wanted !== null) send(wanted, handlers.through())
   })
   source.addEventListener('e', event => {
     lastFrameAt = Date.now()
@@ -85,7 +89,7 @@ function revive () {
 // Move the durable and token tiers to another session without reopening the
 // stream — a reconnect is the one thing you cannot afford on a bad link.
 export function focus (sessionId, from) {
-  wanted = { sessionId, from }
+  wanted = sessionId
   if (streamId === null) { start(); return }
   send(sessionId, from)
 }

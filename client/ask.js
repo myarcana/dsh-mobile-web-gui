@@ -64,14 +64,12 @@ function build (sessionId, ask) {
   for (const question of ask.questions) {
     form.append(line('question', question.header === '' ? question.question : question.header + ': ' + question.question))
     if (question.detail !== '') form.append(line('detail', question.detail))
-    const choices = []
     for (const option of question.options) {
       const choice = document.createElement('input')
       choice.type = question.multiSelect ? 'checkbox' : 'radio'
       choice.name = question.id
       choice.value = option.label
       choice.className = 'pick'
-      choices.push(choice)
       const label = document.createElement('label')
       label.append(choice, option.description === '' ? option.label : option.label + ' — ' + option.description)
       form.append(label)
@@ -91,7 +89,10 @@ function build (sessionId, ask) {
     other.placeholder = question.options.length === 0 ? 'Your answer' : 'Type your own answer'
     // Typing is the choice; the tick only shows what typing already meant, so
     // nobody writes an answer that is silently dropped for want of a tap.
-    other.addEventListener('input', () => { pick.checked = other.value.trim() !== '' })
+    // Focus counts too, so coming back to words kept from before re-ticks them.
+    const tick = () => { pick.checked = other.value.trim() !== '' }
+    other.addEventListener('input', tick)
+    other.addEventListener('focus', tick)
     // Enter in a one-line field would otherwise submit the form implicitly.
     // Here it only finishes the field, leaving the answer to a deliberate tap
     // on Send answer.
@@ -103,17 +104,11 @@ function build (sessionId, ask) {
     const label = document.createElement('label')
     label.append(pick, other)
     form.append(label)
-    // A single-select question is answered by exactly one control, so picking a
-    // listed option clears the typed one. The browser already unticks the
-    // free-text control for us; leaving its words behind would send a
-    // single-select answer carrying *both* a label and free text, and the
-    // harness refuses such an item as malformed — the whole batch with it, so
-    // one leftover word costs every answer on the form.
-    if (!question.multiSelect) {
-      for (const choice of choices) {
-        choice.addEventListener('change', () => { if (choice.checked) other.value = '' })
-      }
-    }
+    // Picking a listed option never clears the typed words: they are the
+    // user's work, and ticking the free-text control again (or typing in it)
+    // brings them straight back. On a single-select the submit below sends
+    // only whichever control is ticked, so leftover words are never sent
+    // alongside a label.
   }
   const send = document.createElement('button')
   send.textContent = 'Send answer'
@@ -125,13 +120,13 @@ function build (sessionId, ask) {
       const custom = String(data.get('custom:' + question.id) ?? '').trim()
       // The free-text option's own control votes with an empty value, so it
       // marks the choice without ever becoming a selected label.
-      const selected = data.getAll(question.id).map(String).filter(label => label !== '')
+      const votes = data.getAll(question.id).map(String)
+      const selected = votes.filter(label => label !== '')
       const answer = { id: question.id, selected }
-      // One control answers a single-select question, so only the ticked one
-      // contributes: free text left behind by a later tap on a listed option is
-      // residue, not a second answer. A multi-select admits both, because there
-      // they are two independent choices rather than one either/or.
-      if (custom !== '' && (question.multiSelect || selected.length === 0)) answer.custom = custom
+      // Typed words count only while their control is ticked. Words kept after
+      // a tap on a listed option of a single-select are kept for the user, not
+      // sent: the harness refuses a single-select item carrying both.
+      if (custom !== '' && votes.includes('')) answer.custom = custom
       return answer
     })
     // Inert before the first await, so a double tap cannot queue two answers.

@@ -61,6 +61,8 @@ export interface SessionSummary {
   readonly worktree: string
   /** One line of the most recent content. */
   readonly lastLine: string
+  /** Whether the session's latest turn ended with an error (`turn/end` reason `error`). */
+  readonly failed: boolean
   /**
    * Whether this session is known to hold no messages at all.
    *

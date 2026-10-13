@@ -10,6 +10,7 @@
 
 import { stamp, inline } from 'time'
 import * as store from 'store'
+import * as outbox from 'outbox'
 import { fold } from 'group'
 
 const log = document.getElementById('log')
@@ -68,10 +69,13 @@ function stateFor (html, knownEmpty) {
 // on a cold deep link and that html is adopted as the transcript, but a notice is
 // a claim about a session rather than part of it, so it must never be stored as
 // one — a cache would otherwise keep announcing emptiness after a message landed.
+//
+// The same goes for this device's undelivered prompts: they are drawn from the
+// outbox on every paint, so a stored copy could only ever be a stale one.
 function withoutNotice (html) {
   const holder = document.createElement('template')
   holder.innerHTML = html
-  for (const node of holder.content.querySelectorAll('[data-notice]')) node.remove()
+  for (const node of holder.content.querySelectorAll('[data-notice], [data-pending]')) node.remove()
   return holder.innerHTML
 }
 
@@ -167,7 +171,10 @@ function placeBySeq (seq, html) {
       return
     }
   }
-  log.append(row)
+  // Newest of all, but still above this device's undelivered prompts.
+  const local = log.querySelector('[data-pending]')
+  if (local === null) log.append(row)
+  else local.before(row)
 }
 
 // Merge a chunk of history into the log in seq order.
@@ -197,12 +204,16 @@ function merge (html, after) {
   }
   const seen = new Set()
   for (const { seq } of present) if (seq !== null) seen.add(seq)
+  // A folded line stands for every seq from its own to `data-last`, so a row in
+  // that range is already on screen even though no article carries its seq.
+  const folded = []
+  for (const { node, seq } of present) if (seq !== null && node.dataset.last !== undefined) folded.push([seq, Number(node.dataset.last)])
   let at = 0
   for (const frame of incoming) {
     const raw = Number(frame.dataset.seq)
     const seq = Number.isSafeInteger(raw) ? raw : null
     // Already drawn: an overlapping re-read must not double a row.
-    if (seq !== null && seen.has(seq)) continue
+    if (seq !== null && (seen.has(seq) || folded.some(([low, high]) => seq >= low && seq <= high))) continue
     // Walk forward to the first row this frame belongs before. A row with no seq
     // of its own (a pending prompt, a partial) is never a boundary, so it keeps
     // whatever neighbours it had.
@@ -314,6 +325,7 @@ export function open (id, cache, knownEmpty) {
   renderedFrom = oldestOnScreen()
   // The list is not a transcript, so it reports neither state.
   setNotice(id === null ? null : stateFor(transcript, knownEmpty))
+  local()
   chrome()
   reconcile()
   // Folding is a presentation pass over the painted rows. `transcript` keeps the
@@ -382,7 +394,7 @@ export function append (frame) {
     }
     // The stored copy is the log's own markup, so it follows the same edit
     // rather than being rebuilt from a string this function no longer holds.
-    transcript = log.innerHTML
+    transcript = withoutNotice(log.innerHTML)
     store.remember(sessionId, transcript, renderedThrough)
     toBottom(stuck)
     return
@@ -405,11 +417,18 @@ export function append (frame) {
     // Only a whole-tail read can answer emptiness, which is why the flag rides
     // on a replace frame and never on a live one.
     setNotice(stateFor(transcript, frame.empty))
+    // The repaint took this device's undelivered prompts with it.
+    local()
   } else {
-    transcript += frame.html
-    log.insertAdjacentHTML('beforeend', frame.html)
+    const html = fresher(frame.html)
+    transcript += html
+    // Above this device's undelivered prompts, which stay the last thing in the
+    // log until the transcript shows them.
+    const local = log.querySelector('[data-pending]')
+    if (local === null) log.insertAdjacentHTML('beforeend', html)
+    else local.insertAdjacentHTML('beforebegin', html)
     // Content just landed, so a notice about there being none is spent.
-    if (frame.html !== '') setNotice(null)
+    if (html !== '') setNotice(null)
   }
   renderedThrough = Math.max(renderedThrough, frame.seq)
   chrome()
@@ -448,29 +467,48 @@ export function token (frame) {
     partial.dataset.partial = ''
     partial.revision = frame.revision
     partial.textContent = ''
-    log.append(partial)
+    // Above this device's undelivered prompts: those reach the agent at its next
+    // step boundary, after the text it is writing now.
+    const local = log.querySelector('[data-pending]')
+    if (local === null) log.append(partial)
+    else local.before(partial)
   }
   if (frame.off === partial.textContent.length) partial.textContent += frame.s
   else if (frame.off === 0) partial.textContent = frame.s
   toBottom(stick)
 }
 
+// Only the rows past the cursor. An increment read from a cursor behind it — a
+// focus racing the live frames it overlaps, or restated late after a reconnect —
+// re-sends rows already on screen, and appending them anyway drew a prompt and
+// its work a second time under the first.
+function fresher (html) {
+  const holder = document.createElement('template')
+  holder.innerHTML = html
+  for (const row of [...holder.content.children]) if (Number(row.dataset.seq) <= renderedThrough) row.remove()
+  return holder.innerHTML
+}
+
 function dropPartial () {
   if (partial !== null) { partial.remove(); partial = null }
 }
 
-// A prompt that has not reached the transcript yet appears immediately, with its
-// state in plain words under it. Never a badge.
+// A prompt this device holds that the transcript has not shown yet, drawn at the
+// bottom of its session with its state in plain words under it. Never a badge.
 //
-// The words come from the server wherever the server has an opinion. This
-// element exists only so the reader sees their own prompt before the round trip
-// finishes; what it *says* about delivery is decided by `sending` (see
-// `deliveryState`), never by the outbox's private view of its own queue.
-export function pending (row) {
+// Drawn from the outbox, which keeps a prompt in storage until the transcript
+// shows it. So a reload, a closed tab, or a return days later draws it again
+// rather than leaving the reader to wonder whether it was ever sent.
+//
+// `fresh` is the reader's own Send, the one case that scrolls to it.
+export function pending (row, fresh) {
   if (row.sessionId !== sessionId) return
   // The durable message can beat the outbox's own state update on a fast link.
   // Once the log holds it, the optimistic copy must never come back.
-  if (log.querySelector('article[data-client-id="' + CSS.escape(row.clientMessageId) + '"]') !== null) return
+  if (log.querySelector('article[data-client-id="' + CSS.escape(row.clientMessageId) + '"]') !== null) {
+    outbox.delivered(row.clientMessageId)
+    return
+  }
   // A prompt is content, so a notice claiming the session is empty is spent.
   if (noticeEl !== null) setNotice(null)
   let el = log.querySelector('[data-pending="' + CSS.escape(row.clientMessageId) + '"]')
@@ -484,25 +522,27 @@ export function pending (row) {
     el.append(body)
     log.append(el)
     // Forced past the typing guard: this row is the reader's own prompt, landing
-    // because they just pressed Send. The composer still has focus — sending
-    // does not take it — so the guard would otherwise decline exactly the one
-    // append the reader is waiting to see.
-    toBottom(stick, true)
+    // because they just pressed Send.
+    if (fresh === true) toBottom(stick, true)
   }
-  // Rejection is the one state the server cannot express, because a refused
-  // prompt is one it never took responsibility for. Everything else defers.
-  if (row.state === 'Rejected') el.dataset.rejected = ''
-  else delete el.dataset.rejected
+  el.dataset.local = row.state
+  if (row.acceptedAt !== undefined) el.dataset.accepted = String(row.acceptedAt)
   paintState(el)
+}
+
+// Draw every prompt this device still holds for the session on screen. Called
+// after anything that rewrites the log, which takes the drawn copies with it.
+export function local () {
+  if (sessionId === null) return
+  for (const row of outbox.prompts(sessionId)) pending(row, false)
 }
 
 // Write the one line under an un-delivered prompt.
 //
-// Three states, one author: rejected is local (the server refused it and said
-// why, in full, elsewhere on the page); sending means the server says it is
-// holding the key; queued means it does not. "Queued" is therefore the honest
-// default for a prompt the server has never heard of — including one sitting in
-// the outbox with no signal to send it over.
+// What this device knows first-hand, overridden by the server where the server
+// knows more: a key the server names as held is sent, whatever this device
+// thinks — that is the lost-response case, where the POST landed but its answer
+// never came back.
 function paintState (el) {
   let state = el.querySelector('.state')
   if (state === null) {
@@ -510,11 +550,17 @@ function paintState (el) {
     state.className = 'state'
     el.append(state)
   }
-  if (el.dataset.rejected !== undefined) {
+  const local = el.dataset.local
+  if (local === 'Rejected') {
     state.textContent = 'Rejected — see the details below'
-    return
+  } else if (local === 'Accepted' || sending.has(el.dataset.pending)) {
+    const at = Number(el.dataset.accepted)
+    state.textContent = (at > 0 ? 'Sent at ' + inline(at) : 'Sent') + ' — not in the transcript yet'
+  } else if (local === 'Sending') {
+    state.textContent = 'Sending'
+  } else {
+    state.textContent = 'Queued on this device — not sent yet'
   }
-  state.textContent = sending.has(el.dataset.pending) ? 'Sending' : 'Queued'
 }
 
 // Adopt the server's in-flight set for the focused session and repaint.
@@ -545,6 +591,8 @@ function reconcile () {
     const key = durable.dataset.clientId
     const optimistic = log.querySelector('[data-pending="' + CSS.escape(key) + '"]')
     if (optimistic !== null) optimistic.remove()
+    // The transcript shows it, so this device stops holding it.
+    outbox.delivered(key)
     if (durable.querySelector('.state') !== null) continue
     const state = document.createElement('p')
     state.className = 'state'
